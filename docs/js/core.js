@@ -22,6 +22,8 @@
   const RESPONSE_NONE = 'none';
   const RESPONSE_UNSURE = 'unsure';
   const RESPONSE_KEYS = Object.freeze([...SHAPE_KEYS, RESPONSE_NONE, RESPONSE_UNSURE]);
+  // How the person answered a trial: counted shapes, saw nothing, or saw something but could not identify it.
+  const ANSWERS = Object.freeze(['counted', 'none', 'unsure']);
 
   const COLORS = Object.freeze([
     { key: 'white', label: 'White', hex: '#ffffff' },
@@ -61,6 +63,7 @@
     screenWidthCm: Object.freeze({ min: 5, max: 400 }),
     screenWidthPx: Object.freeze({ min: 320, max: 10000 }),
     sizeDeg: Object.freeze({ min: 0.1, max: 90 }),
+    count: Object.freeze({ min: 1, max: 20 }),
     responseMs: Object.freeze({ min: 0, max: 600000 }),
     trialsPerSession: 2000,
   });
@@ -226,6 +229,97 @@
     }
   }
 
+  // ---------- layout ----------
+
+  // Centres for `count` shapes of `size` on a width x height stage. Tries every row count and keeps the grid
+  // whose smallest gap between neighbours is largest. Centres stay `size / 2` from each edge, so nothing is cropped.
+  // If the shape cannot fit, every centre falls at the middle, as the single-shape test always did.
+  // The grid with the largest smallest gap between neighbours. Needs count > 1 and a stage at least `size` in each direction.
+  function bestGrid(count, width, height, size) {
+    const spanX = width - size;
+    const spanY = height - size;
+    let best = null;
+    for (let rows = 1; rows <= count; rows += 1) {
+      const cols = Math.ceil(count / rows);
+      const gapX = cols > 1 ? spanX / (cols - 1) : Infinity;
+      const gapY = rows > 1 ? spanY / (rows - 1) : Infinity;
+      const spacing = Math.min(gapX, gapY);
+      if (!best || spacing > best.spacing) {
+        best = { rows, cols, gapX, gapY, spacing };
+      }
+    }
+    return best;
+  }
+
+  function gridPositions(count, width, height, size) {
+    const half = size / 2;
+    const spanX = width - size;
+    const spanY = height - size;
+    const centre = { x: width / 2, y: height / 2 };
+    if (count === 1 || spanX < 0 || spanY < 0) {
+      return Array.from({ length: count }, () => ({ ...centre }));
+    }
+    const best = bestGrid(count, width, height, size);
+    const positions = [];
+    for (let row = 0; positions.length < count; row += 1) {
+      const inRow = Math.min(best.cols, count - positions.length);
+      // Rows with fewer shapes are centred. Centring on half a gap keeps the smallest spacing unchanged.
+      const offset = (best.cols - inRow) / 2;
+      for (let col = 0; col < inRow; col += 1) {
+        positions.push({
+          x: best.cols > 1 ? half + (offset + col) * best.gapX : centre.x,
+          y: best.rows > 1 ? half + row * best.gapY : centre.y,
+        });
+      }
+    }
+    return positions;
+  }
+
+  // Shapes keep a gap of a quarter of their size between them. Touching shapes count as overlapping.
+  const SHAPE_GAP = 0.25;
+
+  // Can `count` shapes of `size` be drawn on a width x height stage with the gap kept and nothing cut off?
+  // Checked before anything is drawn. Returns { fits, reason } where reason is 'too-big' or 'overlap'.
+  function layoutFit(count, width, height, size) {
+    if (size > width || size > height) {
+      return { fits: false, reason: 'too-big' };
+    }
+    if (count === 1) {
+      return { fits: true, reason: null };
+    }
+    return bestGrid(count, width, height, size).spacing >= size * (1 + SHAPE_GAP)
+      ? { fits: true, reason: null }
+      : { fits: false, reason: 'overlap' };
+  }
+
+  // Shuffles in place so the shape types are spread across the stage, not grouped by type.
+  function shuffleInPlace(items, rng = secureRandom) {
+    for (let i = items.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(rng() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return items;
+  }
+
+  // shapes: [{ key, count }]. Returns [{ key, x, y }], one entry per shape to draw.
+  function arrangeShapes(shapes, width, height, size, rng = secureRandom) {
+    if (!shapes.length) {
+      throw new RangeError('At least one shape is needed');
+    }
+    const keys = shapes.flatMap(({ key, count }) => {
+      if (!SHAPE_KEYS.includes(key)) {
+        throw new RangeError(`Unknown shape: ${key}`);
+      }
+      if (!Number.isInteger(count) || count < LIMITS.count.min || count > LIMITS.count.max) {
+        throw new RangeError(`count must be a whole number from ${LIMITS.count.min} to ${LIMITS.count.max}`);
+      }
+      return Array(count).fill(key);
+    });
+    shuffleInPlace(keys, rng);
+    const positions = gridPositions(keys.length, width, height, size);
+    return keys.map((key, index) => ({ key, ...positions[index] }));
+  }
+
   // ---------- drawing ----------
 
   function drawShape(ctx, key, cx, cy, size, { filled, color, lineWidth }) {
@@ -264,7 +358,8 @@
   }
 
   // Returns { position, step(dt), setSpeed(px/s) }. Speed changes take effect on the next step.
-  function createMotion({ width, height, size, speed, pattern = 'bounce', rng = secureRandom }) {
+  // `start` is where the shape begins (a layout position). Without it the start is random.
+  function createMotion({ width, height, size, speed, pattern = 'bounce', start = null, rng = secureRandom }) {
     assertFinite('width', width);
     assertFinite('height', height);
     assertFinite('size', size);
@@ -289,19 +384,28 @@
     const state = { x: 0, y: 0, dx: 1, dy: 0, heading: 0, turnIn: WANDER_TURN_INTERVAL_S, angle: 0, radius: 0 };
     let currentSpeed = speed;
 
+    if (start !== null) {
+      assertFinite('start.x', start.x, -Infinity);
+      assertFinite('start.y', start.y, -Infinity);
+    }
+    const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+
     if (pattern === 'orbit') {
-      state.radius = Math.max(0, Math.min(centreX - half, centreY - half) * 0.8);
-      state.angle = rng() * 2 * Math.PI;
+      // A shape at the middle has no radius to start from, so it takes the default orbit.
+      const maxRadius = Math.max(0, Math.min(centreX - half, centreY - half));
+      const startRadius = start ? Math.hypot(start.x - centreX, start.y - centreY) : 0;
+      state.radius = startRadius > 0 ? Math.min(startRadius, maxRadius) : maxRadius * 0.8;
+      state.angle = startRadius > 0 ? Math.atan2(start.y - centreY, start.x - centreX) : rng() * 2 * Math.PI;
       state.x = centreX + state.radius * Math.cos(state.angle);
       state.y = centreY + state.radius * Math.sin(state.angle);
     } else if (pattern === 'sweep') {
-      state.x = between(minX, maxX);
-      state.y = centreY;
+      state.x = start ? clamp(start.x, minX, maxX) : between(minX, maxX);
+      state.y = start ? clamp(start.y, minY, maxY) : centreY;
       state.dx = rng() < 0.5 ? -1 : 1;
       state.dy = 0;
     } else {
-      state.x = between(minX, maxX);
-      state.y = between(minY, maxY);
+      state.x = start ? clamp(start.x, minX, maxX) : between(minX, maxX);
+      state.y = start ? clamp(start.y, minY, maxY) : between(minY, maxY);
       state.heading = rng() * 2 * Math.PI;
       state.dx = Math.cos(state.heading);
       state.dy = Math.sin(state.heading);
@@ -466,7 +570,37 @@
 
   // ---------- summaries ----------
 
-  const isCorrect = (trial) => trial.response === trial.target;
+  // Older sessions stored one shape per trial (target, response). Read them as one shape with a count of 1.
+  function fromLegacy(target, response) {
+    return {
+      targets: { [target]: 1 },
+      counts: SHAPE_KEYS.includes(response) ? { [response]: 1 } : {},
+      answer: response === RESPONSE_NONE ? 'none' : response === RESPONSE_UNSURE ? 'unsure' : 'counted',
+    };
+  }
+
+  // { targets: { shape: rendered count }, counts: { shape: named count }, answer }
+  function trialCounts(trial) {
+    if (isPlainObject(trial.targets)) {
+      return { targets: trial.targets, counts: trial.counts ?? {}, answer: trial.answer ?? 'counted' };
+    }
+    return fromLegacy(trial.target, trial.response);
+  }
+
+  // Correct only when the person named every shape type shown with its exact count, and no other type.
+  function isCorrect(trial) {
+    const { targets, counts, answer } = trialCounts(trial);
+    if (answer !== 'counted') {
+      return false;
+    }
+    const shapes = new Set([...Object.keys(targets), ...Object.keys(counts)]);
+    return [...shapes].every((shape) => (counts[shape] ?? 0) === (targets[shape] ?? 0));
+  }
+
+  // "star:5;circle:5", in shape order. Empty for no shapes. Used in the CSV.
+  function countsText(counts) {
+    return SHAPE_KEYS.filter((key) => counts[key]).map((key) => `${key}:${counts[key]}`).join(';');
+  }
 
   function accuracyBySize(trials) {
     const rows = new Map();
@@ -483,15 +617,19 @@
       .sort((a, b) => b.sizeDeg - a.sizeDeg);
   }
 
+  // Each shape type in a trial counts once: it was shown, and it was identified if the named count matched.
   function accuracyByShape(trials) {
     const rows = {};
     for (const trial of trials) {
-      const row = rows[trial.target] ?? { shape: trial.target, shown: 0, correct: 0 };
-      row.shown += 1;
-      if (isCorrect(trial)) {
-        row.correct += 1;
+      const { targets, counts } = trialCounts(trial);
+      for (const [shape, expected] of Object.entries(targets)) {
+        const row = rows[shape] ?? { shape, shown: 0, correct: 0 };
+        row.shown += 1;
+        if ((counts[shape] ?? 0) === expected) {
+          row.correct += 1;
+        }
+        rows[shape] = row;
       }
-      rows[trial.target] = row;
     }
     return Object.values(rows)
       .map((row) => ({ ...row, accuracy: row.correct / row.shown }))
@@ -691,6 +829,45 @@
       screenWidthCm: readNumber(input, 'screenWidthCm', LIMITS.screenWidthCm, settingsCtx, { required: true }),
       screenWidthPx: readNumber(input, 'screenWidthPx', { ...LIMITS.screenWidthPx, integer: true }, settingsCtx),
       fixedSizeDeg: readNumber(input, 'fixedSizeDeg', LIMITS.sizeDeg, settingsCtx),
+      count: readNumber(input, 'count', { ...LIMITS.count, integer: true }, settingsCtx),
+    };
+  }
+
+  // Reads a { shape: whole number } map, such as the shapes shown in a trial or the counts the person named.
+  function readCountMap(input, key, min, ctx) {
+    const raw = input[key];
+    if (!isPlainObject(raw)) {
+      ctx.fail(key, 'must be an object');
+      return null;
+    }
+    const map = {};
+    for (const [shape, count] of Object.entries(raw)) {
+      if (!SHAPE_KEYS.includes(shape)) {
+        ctx.fail(`${key}.${shape}`, `must be a shape from: ${SHAPE_KEYS.join(', ')}`);
+      } else if (!Number.isInteger(count) || count < min || count > LIMITS.count.max) {
+        ctx.fail(`${key}.${shape}`, `must be a whole number from ${min} to ${LIMITS.count.max}`);
+      } else {
+        map[shape] = count;
+      }
+    }
+    return map;
+  }
+
+  // Current format: targets, counts and answer. Older format: target and response, one shape per trial.
+  function readTrialAnswer(trial, ctx) {
+    if (trial.targets === undefined) {
+      const target = readEnum(trial, 'target', SHAPE_KEYS, ctx, { required: true });
+      const response = readEnum(trial, 'response', RESPONSE_KEYS, ctx, { required: true });
+      return fromLegacy(target, response);
+    }
+    const targets = readCountMap(trial, 'targets', 1, ctx);
+    if (targets && !Object.keys(targets).length) {
+      ctx.fail('targets', 'must name at least one shape');
+    }
+    return {
+      targets: targets ?? {},
+      counts: (trial.counts === undefined ? {} : readCountMap(trial, 'counts', 0, ctx)) ?? {},
+      answer: readEnum(trial, 'answer', ANSWERS, ctx, { required: true }),
     };
   }
 
@@ -709,13 +886,11 @@
         return null;
       }
       const trialCtx = ctx.child(`trials[${index}]`);
-      const target = readEnum(trial, 'target', SHAPE_KEYS, trialCtx, { required: true });
-      const response = readEnum(trial, 'response', RESPONSE_KEYS, trialCtx, { required: true });
+      const answer = readTrialAnswer(trial, trialCtx);
       return {
         sizeDeg: readNumber(trial, 'sizeDeg', LIMITS.sizeDeg, trialCtx, { required: true }),
-        target,
-        response,
-        correct: target !== null && response === target,
+        ...answer,
+        correct: isCorrect(answer),
         filled: readBoolean(trial, 'filled', trialCtx),
         color: readEnum(trial, 'color', COLOR_KEYS, trialCtx, { required: true }),
         background: readEnum(trial, 'background', BACKGROUND_KEYS, trialCtx, { required: true }),
@@ -918,6 +1093,7 @@
         <dl>
           <dt>Mode</dt><dd>${escapeHtml(session.mode)}</dd>
           <dt>Shapes</dt><dd>${escapeHtml(shapes)}</dd>
+          <dt>Count per shape</dt><dd>${escapeHtml(settings.count ?? 1)}</dd>
           <dt>Fill</dt><dd>${escapeHtml(fill)}</dd>
           <dt>Colour / background</dt><dd>${escapeHtml(settings.color)} on ${escapeHtml(settings.background)}</dd>
           <dt>Motion</dt><dd>${escapeHtml(settings.pattern)} at ${escapeHtml(settings.speed)} px/s</dd>
@@ -986,8 +1162,8 @@ ${sessionSections || '<p class="muted">No sessions recorded yet.</p>'}
     'session_started',
     'mode',
     'trial',
-    'shape_shown',
-    'response',
+    'shapes_shown',
+    'answer',
     'correct',
     'size_deg',
     'response_ms',
@@ -1015,14 +1191,15 @@ ${sessionSections || '<p class="muted">No sessions recorded yet.</p>'}
     const lines = [CSV_HEADERS.join(',')];
     for (const session of person.sessions ?? []) {
       session.trials.forEach((trial, index) => {
+        const { targets, counts, answer } = trialCounts(trial);
         lines.push(
           [
             session.id,
             session.startedAt,
             session.mode,
             index + 1,
-            trial.target,
-            trial.response,
+            countsText(targets),
+            answer === 'counted' ? countsText(counts) : answer,
             isCorrect(trial) ? 'yes' : 'no',
             trial.sizeDeg,
             trial.responseMs,
@@ -1235,6 +1412,7 @@ ${sessionSections || '<p class="muted">No sessions recorded yet.</p>'}
     RESPONSE_NONE,
     RESPONSE_UNSURE,
     RESPONSE_KEYS,
+    ANSWERS,
     COLORS,
     BACKGROUNDS,
     COLOR_KEYS,
@@ -1253,10 +1431,15 @@ ${sessionSections || '<p class="muted">No sessions recorded yet.</p>'}
     pxPerSecToDegPerSec,
     outlinePoints,
     drawShape,
+    gridPositions,
+    layoutFit,
+    arrangeShapes,
     createMotion,
     indexOfNearest,
     createStaircase,
     isCorrect,
+    trialCounts,
+    countsText,
     accuracyBySize,
     accuracyByShape,
     fixedThreshold,

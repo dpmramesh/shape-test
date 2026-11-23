@@ -141,7 +141,11 @@ async function main() {
         }
         await sleep(100);
       }
-      throw new Error(`timed out waiting for: ${label}`);
+      const notice = await evaluate(`document.getElementById('notice').textContent`);
+      const hud = await evaluate(`document.getElementById('hud-message')?.textContent ?? ''`);
+      const status = await evaluate(`document.getElementById('hud-status')?.textContent ?? ''`);
+      const said = [notice, hud, status].filter(Boolean).join(' | ');
+      throw new Error(`timed out waiting for: ${label}${said ? ` (screen says: ${said})` : ''}`);
     };
     const key = (k) => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}' }))`);
     const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
@@ -171,11 +175,47 @@ async function main() {
     await click('[data-action="setup"]');
     await waitFor(`!!document.querySelector('.setup')`, 'setup screen');
     await evaluate(`document.querySelector('[data-action="set"][data-key="mode"][data-value="fixed"]').click()`);
+    // Setup checks that the shapes fit before anything is drawn. Step down the size until the check is clear.
+    let flaggedAtStart = false;
+    let chosenDeg = null;
+    for (const deg of ['5', '4', '3', '2.5', '2', '1.5', '1.25', '1']) {
+      await evaluate(`(() => {
+        const select = document.querySelector('[data-input="fixedSizeDeg"]');
+        select.value = '${deg}';
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+      const flag = await evaluate(`document.getElementById('fit-status').textContent`);
+      if (deg === '5') {
+        flaggedAtStart = Boolean(flag);
+      }
+      if (!flag) {
+        chosenDeg = deg;
+        break;
+      }
+    }
+    assert.ok(chosenDeg, 'at least one size fits the screen');
+    step(flaggedAtStart ? `setup flags 5° as overlapping, and ${chosenDeg}° fits` : `${chosenDeg}° is the starting size`);
+
+    // A trial whose shapes would overlap is held back. Press S for a smaller size until it can be drawn.
+    const showTrial = async (label) => {
+      let presses = 0;
+      while (presses < 8 && (await evaluate(`document.getElementById('hud-message').textContent.includes('cannot fit')`))) {
+        await key('s');
+        presses += 1;
+        await sleep(200);
+      }
+      await waitFor(`document.getElementById('hud-message').textContent.includes('Waiting for the answer')`, label);
+      return presses;
+    };
+
     await click('[data-action="start-test"]');
     await waitFor(`document.getElementById('hud-status')?.textContent.includes('Trial 1')`, 'first trial');
+    await showTrial('first trial shown');
     step('fixed-size test starts from the setup screen');
 
+    // Number keys count a shape; R records the answer.
     await key('1');
+    await key('r');
     await waitFor(`document.getElementById('hud-message').textContent.includes('Recorded')`, 'recorded message');
     await waitFor(`document.getElementById('hud-message').textContent.includes('Waiting for the answer')`, 'second trial');
     step('answering a trial records it and shows the next one');
@@ -193,8 +233,9 @@ async function main() {
     const sizeBefore = await evaluate(`document.getElementById('hud-status').textContent`);
     await key('b');
     const sizeAfter = await evaluate(`document.getElementById('hud-status').textContent`);
-    assert.notEqual(sizeBefore, sizeAfter);
-    step('bigger changes the size of the shape on screen');
+    const refused = await evaluate(`document.getElementById('hud-message').textContent.includes('cannot fit')`);
+    assert.ok(sizeBefore !== sizeAfter || refused, 'bigger either changes the size or is refused with a reason');
+    step(refused ? 'bigger is refused when the shapes would overlap' : 'bigger changes the size of the shape on screen');
 
     await evaluate(`document.querySelector('[data-action="live-set"][data-key="color"][data-value="red"]').click()`);
     const colourSelected = await evaluate(`document.querySelector('[data-action="live-set"][data-key="color"][data-value="red"]').getAttribute('aria-pressed')`);
@@ -216,19 +257,45 @@ async function main() {
     assert.equal(heartOn, 'false', 'heart was on by default, so toggling turns it off');
     step('toggling a shape in the Adjust panel updates the selection');
 
+    await evaluate(`
+      const count = document.querySelector('#adjust select[data-input="count"]');
+      count.value = '2';
+      count.dispatchEvent(new Event('input', { bubbles: true }));
+    `);
+    const savedCount = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.settings')).count`);
+    assert.equal(savedCount, 2);
+    step('changing the count of each shape in the Adjust panel is remembered');
+
     await key('a');
     await waitFor(`document.getElementById('adjust').hidden`, 'adjust panel hidden');
     await key('0');
-    await sleep(900);
+    // The count of 2 applies to this trial: two of each shape type, 14 shapes. The test checks the stage first.
+    const presses = await showTrial('third trial');
+    step(presses ? `14 shapes would overlap, so the trial was held until the size was smaller (${presses} S presses)` : 'a trial with 14 shapes is drawn without overlap');
+    const multiShot = await devtools.send('Page.captureScreenshot', { format: 'png' });
+    const multiPath = path.join(os.tmpdir(), 'lvst-static-multi.png');
+    await fs.writeFile(multiPath, Buffer.from(multiShot.data, 'base64'));
+    console.log(`  info multi-shape screenshot: ${multiPath}`);
+    await key('1');
+    await key('1');
+    await waitFor(`document.getElementById('responses').textContent.includes('(2)')`, 'count shown on the button');
+    await key('r');
+    await waitFor(`document.getElementById('hud-message').textContent.includes('Recorded: Circle 2')`, 'counted answer recorded');
+    step('counting shapes and recording the answer works');
+
     await key('Escape');
     await waitFor(`!!document.querySelector('[data-action="save-session"]')`, 'results screen');
     step('Escape ends the test and shows results');
 
     await click('[data-action="save-session"]');
     await waitFor(`!!document.querySelector('.facts')`, 'person screen after save');
-    const sessions = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.records.v1')).people[0].sessions.length`);
-    assert.equal(sessions, 1);
-    step('saved session is stored locally');
+    const session = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.records.v1')).people[0].sessions[0]`);
+    assert.equal(session.trials.length, 3);
+    const counted = session.trials[2];
+    assert.equal(counted.targets.circle, 2);
+    assert.deepEqual(counted.counts, { circle: 2 });
+    assert.equal(counted.answer, 'counted');
+    step('saved session keeps the shapes shown and the counts named');
 
     assert.deepEqual(errors, [], `browser reported errors: ${errors.join(' | ')}`);
     step('no JavaScript errors in the browser console');
