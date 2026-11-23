@@ -1,0 +1,21 @@
+# Dependencies (none today, but keep the ignore in case one is added)
+node_modules/
+
+# Patient data written by the server and the report CLI
+data/
+reports/
+
+# Backup files downloaded from the static app (personal health information)
+shape-test-backup-*.json
+*.backup.json
+
+# Environment and credential files
+.env
+.env.*
+*.key
+*.pem
+*.p12
+credentials*.json
+
+# Temporary write files
+*.tmp
