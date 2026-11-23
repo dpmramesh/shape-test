@@ -24,7 +24,8 @@
   const SPEED_MAX = 1000;
 
   const DEFAULT_SETTINGS = {
-    shapes: [...L.SHAPE_KEYS],
+    shapes: ['circle'],
+    count: 1,
     fill: 'filled',
     color: 'yellow',
     background: 'black',
@@ -68,6 +69,9 @@
       merged.shapes = Array.isArray(stored.shapes) ? stored.shapes.filter((key) => L.SHAPE_KEYS.includes(key)) : [];
       if (!merged.shapes.length) {
         merged.shapes = [...DEFAULT_SETTINGS.shapes];
+      }
+      if (!Number.isInteger(merged.count) || merged.count < L.LIMITS.count.min || merged.count > L.LIMITS.count.max) {
+        merged.count = DEFAULT_SETTINGS.count;
       }
       return merged;
     } catch {
@@ -126,6 +130,46 @@
 
   function shapeLabel(key) {
     return L.SHAPES.find((shape) => shape.key === key)?.label ?? key;
+  }
+
+  function countOptions(selected) {
+    return Array.from({ length: L.LIMITS.count.max - L.LIMITS.count.min + 1 }, (_, i) => i + L.LIMITS.count.min)
+      .map((n) => `<option value="${n}" ${n === selected ? 'selected' : ''}>${n}</option>`)
+      .join('');
+  }
+
+  // Shapes drawn in one trial: each selected type, `count` times.
+  function shapesPerTrial(s) {
+    return s.shapes.length * s.count;
+  }
+
+  // Explains why a trial cannot be drawn at this size. Empty when the shapes fit.
+  function fitMessage(sizeDeg, px, count, fit) {
+    if (fit.fits) {
+      return '';
+    }
+    const at = `${formatDeg(sizeDeg)} (${Math.round(px)} px)`;
+    const hint = 'Press S for a smaller size, or lower the count in the Adjust panel.';
+    return fit.reason === 'too-big'
+      ? `At ${at} one shape is wider than the screen. ${hint}`
+      : `At ${at}, ${count} shapes cannot fit on this screen without overlapping. ${hint}`;
+  }
+
+  // Setup checks the full window. The test itself checks the real stage, which is smaller because of the controls.
+  function setupFitMessage(s) {
+    if (!calibrationValid(s)) {
+      return '';
+    }
+    const px = L.degToPx(s.fixedSizeDeg, s.viewingDistanceCm, pxPerCmFor(s));
+    const count = shapesPerTrial(s);
+    return fitMessage(s.fixedSizeDeg, px, count, L.layoutFit(count, window.innerWidth, window.innerHeight, px));
+  }
+
+  // "Star 5, Circle 5" for the feedback line. Only shapes with a count above zero.
+  function describeCounts(counts) {
+    return L.SHAPES.filter((shape) => counts[shape.key])
+      .map((shape) => `${shape.label} ${counts[shape.key]}`)
+      .join(', ');
   }
 
   function colorHex(key) {
@@ -477,6 +521,11 @@
           <div class="chips">${L.SHAPES.map((shape) =>
             chip({ action: 'toggle-shape', value: shape.key, label: shape.label, selected: s.shapes.includes(shape.key) }),
           ).join('')}</div>
+          <label>How many of each selected shape
+            <select data-input="count">${countOptions(s.count)}</select>
+          </label>
+          <p class="muted">Star at 5 shows 5 stars. Star and Circle at 5 shows 5 stars and 5 circles.</p>
+          <p id="fit-status" class="notice warn" role="status">${esc(setupFitMessage(s))}</p>
         </fieldset>
         <fieldset>
           <legend>Fill</legend>
@@ -556,6 +605,10 @@
     if (calibration) {
       calibration.textContent = calibrationText(s);
     }
+    const fitStatus = document.getElementById('fit-status');
+    if (fitStatus) {
+      fitStatus.textContent = setupFitMessage(s);
+    }
   }
 
   // ---------- test: canvas ----------
@@ -565,30 +618,40 @@
     let frameId = null;
     let lastTime = null;
     let trial = null;
-    let motion = null;
     let paused = false;
 
     // The stage is sized to the area not covered by the operator panels, so a shape is never drawn underneath them.
     function resize(height = window.innerHeight, width = window.innerWidth) {
-      canvas.width = Math.max(1, Math.round(width));
-      canvas.height = Math.max(1, Math.round(height));
+      const nextWidth = Math.max(1, Math.round(width));
+      const nextHeight = Math.max(1, Math.round(height));
+      const changed = nextWidth !== canvas.width || nextHeight !== canvas.height;
+      canvas.width = nextWidth;
+      canvas.height = nextHeight;
+      // The shapes were placed for the old stage size, so they are laid out again for the new one.
+      if (changed && trial) {
+        build();
+      }
     }
 
     function paint() {
       ctx.fillStyle = trial ? trial.background : '#000000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (!trial || !motion) {
+      if (!trial) {
         return;
       }
-      const { x, y } = motion.position;
-      L.drawShape(ctx, trial.target, x, y, trial.sizePx, { filled: trial.filled, color: trial.color });
+      for (const item of trial.items) {
+        const { x, y } = item.motion.position;
+        L.drawShape(ctx, item.key, x, y, trial.sizePx, { filled: trial.filled, color: trial.color });
+      }
     }
 
     function frame(time) {
       const dt = lastTime === null ? 0 : (time - lastTime) / 1000;
       lastTime = time;
-      if (!paused && motion) {
-        motion.step(dt);
+      if (!paused && trial) {
+        for (const item of trial.items) {
+          item.motion.step(dt);
+        }
       }
       paint();
       frameId = requestAnimationFrame(frame);
@@ -601,37 +664,53 @@
       }
     }
 
-    // params: { target, sizePx, filled, color, background, pattern, speed }
+    // Places every shape at its layout position. Each shape then moves on its own with the same pattern and speed.
+    function build() {
+      const placed = L.arrangeShapes(trial.shapes, canvas.width, canvas.height, trial.sizePx);
+      trial.items = placed.map(({ key, x, y }) => ({
+        key,
+        motion: L.createMotion({
+          width: canvas.width,
+          height: canvas.height,
+          size: trial.sizePx,
+          speed: trial.speed,
+          pattern: trial.pattern,
+          start: { x, y },
+        }),
+      }));
+    }
+
+    // params: { shapes: [{ key, count }], sizePx, filled, color, background, pattern, speed }
     function show(params) {
-      trial = { ...params };
-      motion = L.createMotion({
-        width: canvas.width,
-        height: canvas.height,
-        size: params.sizePx,
-        speed: params.speed,
-        pattern: params.pattern,
-      });
+      trial = { ...params, items: [] };
+      build();
       paint();
       ensureLoop();
     }
 
-    // Changes what is drawn right now: size, colour, fill, background.
+    // Changes what is drawn right now: size, colour, fill, background. A new size re-lays out the shapes.
     function update(partial) {
       if (trial) {
+        const resized = partial.sizePx !== undefined && partial.sizePx !== trial.sizePx;
         Object.assign(trial, partial);
+        if (resized) {
+          build();
+        }
         paint();
       }
     }
 
     function setSpeed(value) {
-      if (motion) {
-        motion.setSpeed(value);
+      if (trial) {
+        trial.speed = value;
+        for (const item of trial.items) {
+          item.motion.setSpeed(value);
+        }
       }
     }
 
     function clear() {
       trial = null;
-      motion = null;
       paint();
       ensureLoop();
     }
@@ -645,6 +724,7 @@
 
     return {
       resize,
+      stageSize: () => ({ width: canvas.width, height: canvas.height }),
       show,
       update,
       setSpeed,
@@ -671,6 +751,11 @@
       setNotice('Check the viewing distance and screen width. Both must be numbers within the allowed range.');
       return;
     }
+    const fitProblem = setupFitMessage(s);
+    if (fitProblem) {
+      setNotice(fitProblem);
+      return;
+    }
     saveSettings();
     state.test = {
       personId: state.person.id,
@@ -684,6 +769,7 @@
       staircase: s.mode === 'adaptive' ? L.createStaircase({ startDeg: s.fixedSizeDeg, maxTrials: MAX_ADAPTIVE_TRIALS }) : null,
       pxPerCm: pxPerCmFor(s),
       nextTimer: null,
+      blocked: false,
       hudVisible: true,
       adjustVisible: false,
       paused: false,
@@ -695,20 +781,12 @@
   }
 
   function renderTestScreen() {
-    const shapeButtons = L.SHAPES.map(
-      (shape, index) =>
-        `<button type="button" data-action="respond" data-value="${shape.key}" data-focus-id="resp:${shape.key}">${index + 1} ${esc(shape.label)}</button>`,
-    ).join('');
     render(
       `<div class="test-screen" id="test-screen">
         <canvas id="stage" aria-label="Moving shape display"></canvas>
         <div class="hud" id="hud">
           <div class="status" id="hud-status"></div>
-          <div class="responses" aria-label="Person's answer">
-            ${shapeButtons}
-            <button type="button" data-action="respond" data-value="none" data-focus-id="resp:none">0 Nothing seen</button>
-            <button type="button" data-action="respond" data-value="unsure" data-focus-id="resp:unsure">U Seen, not identified</button>
-          </div>
+          <div class="responses" id="responses" aria-label="Person's answer"></div>
           <div class="controls">
             <button type="button" data-action="toggle-pause" data-focus-id="ctl:pause" id="btn-pause">Pause (P)</button>
             <button type="button" data-action="toggle-adjust" data-focus-id="ctl:adjust" id="btn-adjust">Adjust (A)</button>
@@ -723,12 +801,40 @@
     );
     trialView?.stop();
     trialView = createTrialView(document.getElementById('stage'));
+    renderResponses();
     updateHud();
+  }
+
+  // Buttons for the person's answer: one per shape type on the current trial, then record, clear, and the two no-shape answers.
+  // Pressing a shape button adds one to its count. The number keys do the same.
+  function renderResponses() {
+    const container = document.getElementById('responses');
+    const t = state.test;
+    if (!container || !t) {
+      return;
+    }
+    const shown = t.current ? t.current.targets : {};
+    const counts = t.current ? t.current.counts : {};
+    const shapeButtons = L.SHAPES.filter((shape) => shown[shape.key])
+      .map((shape) => {
+        const index = L.SHAPE_KEYS.indexOf(shape.key);
+        const named = counts[shape.key] ? ` (${counts[shape.key]})` : '';
+        return `<button type="button" data-action="count" data-value="${shape.key}" data-focus-id="resp:${shape.key}">${index + 1} ${esc(shape.label)}${named}</button>`;
+      })
+      .join('');
+    replaceKeepingFocus(
+      container,
+      `${shapeButtons}
+        <button type="button" class="primary" data-action="record" data-focus-id="resp:record">Record answer (R)</button>
+        <button type="button" data-action="clear-answer" data-focus-id="resp:clear">Clear count (C)</button>
+        <button type="button" data-action="respond" data-value="none" data-focus-id="resp:none">0 Nothing seen</button>
+        <button type="button" data-action="respond" data-value="unsure" data-focus-id="resp:unsure">U Seen, not identified</button>`,
+    );
   }
 
   // Sizes the shape stage so it never sits under the response bar or the Adjust panel.
   // The panel is a column on the right; the response bar is a strip along the bottom.
-  function layoutStage() {
+  function sizeStage() {
     const t = state.test;
     if (!t || !trialView) {
       return;
@@ -740,6 +846,30 @@
     cssVars.setProperty('--hud-h', `${hudHeight}px`);
     cssVars.setProperty('--panel-w', `${panelWidth}px`);
     trialView.resize(window.innerHeight - hudHeight, window.innerWidth - panelWidth);
+  }
+
+  // Sizes the stage, then holds the shown trial if its shapes no longer fit the smaller stage.
+  function layoutStage() {
+    const t = state.test;
+    sizeStage();
+    if (!t || !trialView || !t.current) {
+      return;
+    }
+    const count = Object.values(t.current.targets).reduce((sum, n) => sum + n, 0);
+    const px = L.degToPx(t.current.sizeDeg, state.settings.viewingDistanceCm, t.pxPerCm);
+    const fit = stageFit(px, count);
+    if (!fit.fits) {
+      holdTrial(t, fitMessage(t.current.sizeDeg, px, count, fit));
+    }
+  }
+
+  // Takes the shapes off the screen and waits. Nothing is drawn until the size or count changes so the trial fits.
+  function holdTrial(t, message) {
+    t.blocked = true;
+    t.current = null;
+    trialView.clear();
+    renderResponses();
+    setHudMessage(message);
   }
 
   function currentSizeDeg() {
@@ -757,10 +887,10 @@
     const s = state.settings;
     const sizeDeg = currentSizeDeg();
     const px = Math.round(L.degToPx(sizeDeg, s.viewingDistanceCm, t.pxPerCm));
-    const identified = t.trials.filter((trial) => trial.response === trial.target).length;
+    const identified = t.trials.filter(L.isCorrect).length;
     const modeText = t.mode === 'adaptive' ? `Adaptive · ${t.staircase.reversals.length} reversals` : 'Fixed size';
     status.textContent =
-      `${t.personName} · Trial ${t.trials.length + (t.current ? 1 : 0)} · ` +
+      `${t.personName} · Trial ${t.trials.length + 1} · ` +
       `Size ${formatDeg(sizeDeg)} (${px} px) · Speed ${s.speed} px/s · ` +
       `${identified} of ${t.trials.length} identified · ${modeText}`;
     const liveSize = document.getElementById('live-size');
@@ -788,7 +918,7 @@
   }
 
   // The Adjust panel. Colour, fill, speed, size and calibration apply to the shape on screen now.
-  // Shapes and motion pattern apply from the next trial, so the person is not asked about a changed shape mid-answer.
+  // Shapes, count and motion pattern apply from the next trial, so the person is not asked about a changed shape mid-answer.
   function renderAdjust() {
     const s = state.settings;
     const t = state.test;
@@ -802,6 +932,10 @@
           <div class="chips">${L.SHAPES.map((shape) =>
             chip({ action: 'live-toggle-shape', value: shape.key, label: shape.label, selected: s.shapes.includes(shape.key) }),
           ).join('')}</div>
+        </fieldset>
+        <fieldset>
+          <legend>How many of each (from next trial)</legend>
+          <select data-input="count" data-focus-id="input:count">${countOptions(s.count)}</select>
         </fieldset>
         <fieldset>
           <legend>Motion (from next trial)</legend>
@@ -873,11 +1007,21 @@
       trialView.update({ filled: t.current.filled });
     } else if (key === 'speed') {
       trialView.setSpeed(s.speed);
+    } else if (key === 'count' && t.blocked) {
+      // A lower count may make the blocked trial fit now.
+      nextTrial();
     } else if (key === 'viewingDistanceCm' || key === 'screenWidthCm') {
       if (calibrationValid(s)) {
         t.pxPerCm = pxPerCmFor(s);
         if (t.current) {
-          trialView.update({ sizePx: L.degToPx(t.current.sizeDeg, s.viewingDistanceCm, t.pxPerCm) });
+          const px = L.degToPx(t.current.sizeDeg, s.viewingDistanceCm, t.pxPerCm);
+          const count = Object.values(t.current.targets).reduce((sum, n) => sum + n, 0);
+          const fit = stageFit(px, count);
+          if (fit.fits) {
+            trialView.update({ sizePx: px });
+          } else {
+            setHudMessage(`${fitMessage(t.current.sizeDeg, px, count, fit)} The new calibration is not applied to this shape.`);
+          }
         }
         const livePx = document.getElementById('live-px');
         if (livePx) {
@@ -889,30 +1033,53 @@
     updateStatusLine();
   }
 
+  // Stage check for the shapes on screen. Used before drawing, so overlapping shapes are never drawn.
+  function stageFit(px, count) {
+    const { width, height } = trialView.stageSize();
+    return L.layoutFit(count, width, height, px);
+  }
+
   function nextTrial() {
     const t = state.test;
     if (!t) {
       return;
     }
+    clearTimeout(t.nextTimer);
     if (t.mode === 'adaptive' && t.staircase.isDone()) {
       finishTest();
       return;
     }
     const s = state.settings;
     const sizeDeg = t.mode === 'adaptive' ? t.staircase.currentDeg() : t.sizeDeg;
-    const target = L.pickOne(s.shapes);
+    const px = L.degToPx(sizeDeg, s.viewingDistanceCm, t.pxPerCm);
+    const count = shapesPerTrial(s);
     const filled = s.fill === 'mixed' ? L.secureRandom() < 0.5 : s.fill === 'filled';
+    // Every selected shape type is drawn `count` times. The count is read now, so changes made later apply from the next trial.
+    const shapes = s.shapes.map((key) => ({ key, count: s.count }));
+    const targets = Object.fromEntries(shapes.map(({ key, count }) => [key, count]));
     t.current = {
-      target,
+      targets,
+      counts: {},
       sizeDeg,
       filled,
       pattern: s.pattern,
       shownAt: new Date().toISOString(),
       startedAt: performance.now(),
     };
+    // The response bar is laid out first, because its height sets the stage height. Only then is the stage checked.
+    renderResponses();
+    sizeStage();
+    const fit = stageFit(px, count);
+    if (!fit.fits) {
+      // Nothing is drawn. Wait here until the operator makes the size smaller or the count lower.
+      holdTrial(t, fitMessage(sizeDeg, px, count, fit));
+      updateHud();
+      return;
+    }
+    t.blocked = false;
     trialView.show({
-      target,
-      sizePx: L.degToPx(sizeDeg, s.viewingDistanceCm, t.pxPerCm),
+      shapes,
+      sizePx: px,
       filled,
       color: colorHex(s.color),
       background: backgroundHex(s.background),
@@ -923,19 +1090,60 @@
     updateHud();
   }
 
-  function respond(value) {
-    const t = state.test;
-    if (!t || !t.current) {
+  // Adds one to the count for a shape type shown on this trial.
+  function countShape(key) {
+    const current = state.test?.current;
+    if (!current || !(key in current.targets)) {
       return;
     }
+    const named = current.counts[key] ?? 0;
+    if (named < L.LIMITS.count.max) {
+      current.counts[key] = named + 1;
+    }
+    setHudMessage(`Named so far: ${describeCounts(current.counts)}.`);
+    renderResponses();
+  }
+
+  function clearCount() {
+    const current = state.test?.current;
+    if (!current) {
+      return;
+    }
+    current.counts = {};
+    setHudMessage('Count cleared.');
+    renderResponses();
+  }
+
+  // Records the counts the person named. Needs at least one count, or use 0 for nothing seen.
+  function recordAnswer() {
+    const current = state.test?.current;
+    if (!current) {
+      return;
+    }
+    if (!Object.keys(current.counts).length) {
+      setHudMessage('Press a shape number to count it, or 0 for nothing seen.');
+      return;
+    }
+    finishTrial('counted', current.counts);
+  }
+
+  // The person saw nothing ('none') or saw something but could not identify it ('unsure').
+  function respond(answer) {
+    if (state.test?.current) {
+      finishTrial(answer, {});
+    }
+  }
+
+  function finishTrial(answer, counts) {
+    const t = state.test;
     const s = state.settings;
     const current = t.current;
     const sizeDeg = t.mode === 'fixed' ? t.sizeDeg : current.sizeDeg;
-    const correct = value === current.target;
-    t.trials.push({
+    const trial = {
       sizeDeg,
-      target: current.target,
-      response: value,
+      targets: current.targets,
+      counts,
+      answer,
       filled: current.filled,
       color: s.color,
       background: s.background,
@@ -943,40 +1151,57 @@
       speed: s.speed,
       responseMs: Math.round(performance.now() - current.startedAt),
       shownAt: current.shownAt,
-    });
+    };
+    t.trials.push(trial);
     if (t.staircase) {
-      t.staircase.record(correct);
+      t.staircase.record(L.isCorrect(trial));
     }
     t.current = null;
     trialView.clear();
-    const label = value === 'none' ? 'nothing seen' : value === 'unsure' ? 'seen, not identified' : shapeLabel(value);
+    const label = answer === 'none' ? 'nothing seen' : answer === 'unsure' ? 'seen, not identified' : describeCounts(counts);
     setHudMessage(`Recorded: ${label}. Get ready.`);
+    renderResponses();
     updateHud();
     t.nextTimer = setTimeout(nextTrial, GAP_BETWEEN_TRIALS_MS);
   }
 
+  // The next size level up (delta -1) or down (delta +1) from `deg`.
+  function neighbourSizeDeg(deg, delta) {
+    const levels = L.SIZE_LEVELS_DEG;
+    const index = L.indexOfNearest(levels, deg);
+    return levels[Math.min(levels.length - 1, Math.max(0, index + delta))];
+  }
+
   // Bigger or smaller by one level. In fixed mode this changes the size; in adaptive mode it nudges the staircase.
+  // While shapes are on screen, a size where they would overlap is refused. While a trial is held back, any size can be
+  // chosen, because the held trial is checked again once the size changes.
   function changeSize(direction) {
     const t = state.test;
     if (!t) {
       return;
     }
-    const delta = direction === 'bigger' ? -1 : 1;
     const s = state.settings;
+    const delta = direction === 'bigger' ? -1 : 1;
+    const nextDeg = neighbourSizeDeg(currentSizeDeg(), delta);
+    const px = L.degToPx(nextDeg, s.viewingDistanceCm, t.pxPerCm);
+    if (t.current) {
+      const count = Object.values(t.current.targets).reduce((sum, n) => sum + n, 0);
+      const fit = stageFit(px, count);
+      if (!fit.fits) {
+        setHudMessage(fitMessage(nextDeg, px, count, fit));
+        return;
+      }
+    }
     if (t.mode === 'adaptive') {
       t.staircase.nudge(delta);
-      if (t.current) {
-        t.current.sizeDeg = t.staircase.currentDeg();
-        trialView.update({ sizePx: L.degToPx(t.current.sizeDeg, s.viewingDistanceCm, t.pxPerCm) });
-      }
     } else {
-      const index = L.indexOfNearest(L.SIZE_LEVELS_DEG, t.sizeDeg);
-      const next = Math.min(L.SIZE_LEVELS_DEG.length - 1, Math.max(0, index + delta));
-      t.sizeDeg = L.SIZE_LEVELS_DEG[next];
-      if (t.current) {
-        t.current.sizeDeg = t.sizeDeg;
-        trialView.update({ sizePx: L.degToPx(t.sizeDeg, s.viewingDistanceCm, t.pxPerCm) });
-      }
+      t.sizeDeg = nextDeg;
+    }
+    if (t.current) {
+      t.current.sizeDeg = nextDeg;
+      trialView.update({ sizePx: px });
+    } else if (t.blocked) {
+      nextTrial();
     }
     updateHud();
   }
@@ -1035,6 +1260,7 @@
       threshold: t.staircase ? t.staircase.threshold() : null,
       settings: {
         shapes: [...s.shapes],
+        count: s.count,
         fill: s.fill,
         color: s.color,
         background: s.background,
@@ -1133,6 +1359,9 @@
     },
     'start-test': () => startTest(),
     respond: (el) => respond(el.dataset.value),
+    count: (el) => countShape(el.dataset.value),
+    record: () => recordAnswer(),
+    'clear-answer': () => clearCount(),
     'toggle-pause': () => togglePause(),
     'toggle-hud': () => toggleHud(),
     'toggle-adjust': () => toggleAdjust(),
@@ -1291,10 +1520,11 @@
     }
     if (/^[1-9]$/.test(event.key)) {
       const shape = L.SHAPES[Number(event.key) - 1];
-      if (shape) {
-        respond(shape.key);
+      if (shape && state.test.current && shape.key in state.test.current.targets) {
+        countShape(shape.key);
+        return true;
       }
-      return Boolean(shape);
+      return false;
     }
     switch (event.key) {
       case '0':
@@ -1303,6 +1533,14 @@
       case 'u':
       case 'U':
         respond('unsure');
+        return true;
+      case 'r':
+      case 'R':
+        recordAnswer();
+        return true;
+      case 'c':
+      case 'C':
+        clearCount();
         return true;
       case 'p':
       case 'P':

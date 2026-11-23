@@ -23,7 +23,8 @@ GitHub Pages serves over HTTPS, which the browser needs for some features. Nothi
 
 ### Setup (before the test)
 
-- **Shapes:** circle, square, triangle, diamond, star, hexagon, cross, heart. Choose any combination.
+- **Shapes:** circle, square, triangle, diamond, star, hexagon, cross, heart. Choose any combination. Only circle is selected by default.
+- **How many of each:** 1 to 20, default 1. The count applies to each selected shape type. Star at 5 shows 5 stars. Star and Circle at 5 shows 5 stars and 5 circles.
 - **Fill:** filled, outline, or mixed (random per shape).
 - **Colour and background:** eight shape colours and four backgrounds, for contrast testing.
 - **Motion:** bounce, sweep (side to side), orbit (circle), or wander (random turns). Speed is a slider from 0 to 1000 px/s, with the equivalent °/s shown.
@@ -34,9 +35,12 @@ GitHub Pages serves over HTTPS, which the browser needs for some features. Nothi
 
 ### During the test
 
-- **Responses:** tap the shape the person named, `0` for nothing seen, or `U` for seen but not identified. Response time is recorded.
+- **Layout and motion:** shapes are spaced as far apart as the stage allows, with a gap of a quarter of a shape's size between neighbours, and none is cut off at the edges. Each shape moves on its own with the chosen motion. Shapes may pass over each other while moving. In orbit mode, a shape placed near an edge jumps onto the largest orbit that stays on screen on its first frame.
+- **Overlap check:** before anything is drawn, the app checks that the shapes fit. Setup shows a warning and will not start a test if the starting size does not fit. During the test, a trial that would not fit is held back, and the message says what to change: press `S` for a smaller size, or lower the count. A size change that would make shapes on screen overlap is refused. If the Adjust panel or a window resize shrinks the stage so the shapes on screen would overlap, that trial is held back the same way.
+- **Responses:** the person names each shape type they see and says how many of it there are. Tap a shape type (or press its number) once for each one counted, then tap **Record answer** (or press `R`). Only the shape types on the current trial are listed. Use **Clear count** (or `C`) to start the count again. `0` records nothing seen, and `U` records seen but not identified. Response time is recorded.
+- **Scoring:** a trial is correct only if every shape type shown has exactly the right count, and no other shape type is named. Accuracy by shape counts each shape type in a trial separately.
 - **Adjust panel (`A`):** change parameters while the test runs, so you can respond to what the person says:
-  - *Shapes* and *motion*: take effect from the next shape (so the person isn't asked about a shape that changed mid-answer).
+  - *Shapes*, *count* and *motion*: take effect from the next trial (so the person isn't asked about a shape that changed mid-answer).
   - *Fill*, *colour*, *background*, *speed*, *size* and *calibration*: take effect on the shape on screen now.
   - *Size* moves the staircase level in adaptive mode without counting as a reversal, so you can steer the test by hand.
 - **Pause (`P`)** and **hide controls (`H`)** for a cleaner view.
@@ -49,7 +53,7 @@ Every trial stores the settings in effect when it was shown: shape, size, fill, 
 - Each person has name, age, gender, current vision level, issues and notes.
 - Each session keeps its date, settings and every trial.
 - **Download report (HTML):** printable report with a progress chart, threshold trend, and accuracy by size and by shape. Open it and use Print to save as PDF.
-- **Download trials (CSV):** one row per trial, safe to open in a spreadsheet.
+- **Download trials (CSV):** one row per trial, safe to open in a spreadsheet. `shapes_shown` and `answer` list each shape type with its count, for example `circle:5;star:5`. An answer of `none` or `unsure` is written as is.
 - **Download backup / Restore from backup:** all people and sessions in one JSON file. Use it to keep a copy or move records to another device.
 
 ## Keyboard and remote
@@ -58,7 +62,9 @@ Every trial stores the settings in effect when it was shown: shape, size, fill, 
 |---|---|
 | Arrow keys / remote D-pad | Move between buttons and sliders |
 | Select / Enter | Press the focused button |
-| `1`–`8` | Person named the shapes in list order: circle, square, triangle, diamond, star, hexagon, cross, heart |
+| `1`–`8` | Count one more of that shape type: 1 circle, 2 square, 3 triangle, 4 diamond, 5 star, 6 hexagon, 7 cross, 8 heart (only types on the current trial) |
+| `R` | Record the answer with the counts entered |
+| `C` | Clear the counts entered for this trial |
 | `0` | Nothing seen |
 | `U` | Seen but not identified |
 | `P` | Pause or resume |
@@ -132,5 +138,6 @@ It opens `docs/index.html` straight from disk with no server, creates a person, 
 
 - Tested in headless Microsoft Edge on Windows. Not yet run on a physical Fire TV or Google TV. Check the Silk and Google TV browsers before a clinical session.
 - Sizes are only as accurate as the calibration values entered.
+- Shapes are placed on a grid to keep the gaps as large as possible. When there is no room for the gap, the test will not start, or the trial is held back (see Overlap check above). The overlap check uses the full window at setup. The test itself checks the smaller stage, so a size that passes setup can still be held back during the test.
 - The threshold needs enough reversals. An adaptive session with too few shows "not enough reversals".
 - Downloads depend on the browser. On some TV browsers the file may not save. If so, use the report on a laptop, or record results on paper and enter them later.

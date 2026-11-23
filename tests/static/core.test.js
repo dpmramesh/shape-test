@@ -200,8 +200,177 @@ describe('reports and CSV', () => {
     const lines = csv.trim().split('\r\n');
     assert.equal(lines.length, 3);
     assert.match(lines[0], /speed_px_per_s/);
-    assert.match(lines[1], /,circle,circle,yes,/);
-    assert.match(lines[2], /,square,none,no,/);
+    assert.match(lines[1], /,circle:1,circle:1,yes,/);
+    assert.match(lines[2], /,square:1,none,no,/);
+  });
+
+  test('CSV shows every shape type and its count for a multi-shape trial', () => {
+    const trial = sampleSession().trials[0];
+    const multi = { ...trial, targets: { star: 5, circle: 5 }, counts: { star: 5, circle: 4 }, answer: 'counted' };
+    delete multi.target;
+    delete multi.response;
+    const csv = L.buildTrialsCsv({ ...PERSON, sessions: [{ id: 's3', ...sampleSession({ trials: [multi] }) }] });
+    const lines = csv.trim().split('\r\n');
+    assert.match(lines[0], /^session_id,session_started,mode,trial,shapes_shown,answer,correct,/);
+    // Shapes are listed in the app's shape order, so circle comes before star.
+    assert.match(lines[1], /,circle:5;star:5,circle:4;star:5,no,/);
+  });
+});
+
+describe('multiple shapes per trial', () => {
+  const exact = { targets: { star: 5, circle: 5 }, counts: { star: 5, circle: 5 }, answer: 'counted' };
+  const minGap = (points) => {
+    let best = Infinity;
+    for (let i = 0; i < points.length; i += 1) {
+      for (let j = i + 1; j < points.length; j += 1) {
+        best = Math.min(best, Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y));
+      }
+    }
+    return best;
+  };
+
+  test('one shape type with a count of 5 gives 5 shapes of that type', () => {
+    const placed = L.arrangeShapes([{ key: 'star', count: 5 }], 1000, 800, 60, () => 0.3);
+    assert.equal(placed.length, 5);
+    assert.ok(placed.every((item) => item.key === 'star'));
+  });
+
+  test('two shape types with a count of 5 give 5 of each', () => {
+    const placed = L.arrangeShapes([{ key: 'star', count: 5 }, { key: 'circle', count: 5 }], 1000, 800, 60);
+    assert.equal(placed.filter((item) => item.key === 'star').length, 5);
+    assert.equal(placed.filter((item) => item.key === 'circle').length, 5);
+  });
+
+  test('a count of 20 keeps every shape fully on screen', () => {
+    const placed = L.arrangeShapes([{ key: 'heart', count: 20 }], 800, 600, 50);
+    for (const { x, y } of placed) {
+      assert.ok(x >= 25 - 1e-9 && x <= 775 + 1e-9, `x=${x}`);
+      assert.ok(y >= 25 - 1e-9 && y <= 575 + 1e-9, `y=${y}`);
+    }
+  });
+
+  test('the grid spreads shapes as far apart as it can', () => {
+    // Four shapes on a 1000 x 1000 stage: a 2 x 2 grid with a gap of 900 beats a 1 x 4 row (gap 300).
+    assert.equal(Math.round(minGap(L.gridPositions(4, 1000, 1000, 100))), 900);
+  });
+
+  test('no two shapes overlap when there is room for them', () => {
+    for (let count = 1; count <= 20; count += 1) {
+      const placed = L.gridPositions(count, 1280, 800, 30);
+      if (count > 1) {
+        assert.ok(minGap(placed) >= 30, `count ${count}`);
+      }
+    }
+  });
+
+  test('layoutFit says whether shapes can be drawn without overlap, before drawing', () => {
+    assert.deepEqual(L.layoutFit(4, 1000, 1000, 100), { fits: true, reason: null });
+    assert.deepEqual(L.layoutFit(20, 800, 600, 300), { fits: false, reason: 'overlap' });
+    assert.deepEqual(L.layoutFit(1, 800, 600, 700), { fits: false, reason: 'too-big' });
+    assert.deepEqual(L.layoutFit(1, 800, 600, 600), { fits: true, reason: null });
+  });
+
+  test('touching shapes are refused: a gap of a quarter of the size is kept', () => {
+    // Two shapes of 100 on a 200 x 100 stage touch with no gap, so they do not fit.
+    assert.deepEqual(L.layoutFit(2, 200, 100, 100), { fits: false, reason: 'overlap' });
+    assert.deepEqual(L.layoutFit(2, 300, 100, 100), { fits: true, reason: null });
+  });
+
+  test('when layoutFit says shapes fit, the drawn layout keeps the gap', () => {
+    for (const count of [2, 3, 5, 8, 13, 20]) {
+      for (const size of [20, 40, 60, 90, 120]) {
+        if (L.layoutFit(count, 800, 600, size).fits) {
+          const placed = L.gridPositions(count, 800, 600, size);
+          assert.ok(minGap(placed) >= size * 1.25 - 1e-9, `count ${count} size ${size}`);
+        }
+      }
+    }
+  });
+
+  test('a single shape is centred', () => {
+    assert.deepEqual(L.gridPositions(1, 800, 600, 60), [{ x: 400, y: 300 }]);
+  });
+
+  test('a shape too big for the stage sits in the middle, as before', () => {
+    assert.deepEqual(L.gridPositions(2, 100, 100, 300), [{ x: 50, y: 50 }, { x: 50, y: 50 }]);
+  });
+
+  test('an invalid count or unknown shape is rejected by the layout', () => {
+    assert.throws(() => L.arrangeShapes([{ key: 'star', count: 0 }], 100, 100, 10), RangeError);
+    assert.throws(() => L.arrangeShapes([{ key: 'star', count: 21 }], 100, 100, 10), RangeError);
+    assert.throws(() => L.arrangeShapes([{ key: 'blob', count: 2 }], 100, 100, 10), RangeError);
+    assert.throws(() => L.arrangeShapes([], 100, 100, 10), RangeError);
+  });
+
+  test('a shape starts at its layout position and moves from there', () => {
+    for (const pattern of ['bounce', 'sweep', 'wander']) {
+      const motion = L.createMotion({ width: 800, height: 600, size: 60, speed: 100, pattern, start: { x: 200, y: 150 }, rng: () => 0.5 });
+      assert.deepEqual(motion.position, { x: 200, y: 150 }, pattern);
+    }
+    const orbit = L.createMotion({ width: 800, height: 600, size: 60, speed: 100, pattern: 'orbit', start: { x: 600, y: 300 }, rng: () => 0.5 });
+    assert.ok(Math.abs(orbit.position.x - 600) < 1e-6 && Math.abs(orbit.position.y - 300) < 1e-6);
+  });
+
+  test('an orbit shape starting near an edge moves onto the largest orbit that stays on screen', () => {
+    // Centre (400, 300); the largest orbit that keeps size 60 on screen has radius 270. A start at x = 30 is radius 370.
+    const orbit = L.createMotion({ width: 800, height: 600, size: 60, speed: 100, pattern: 'orbit', start: { x: 30, y: 300 }, rng: () => 0.5 });
+    assert.ok(Math.abs(orbit.position.x - 130) < 1e-6 && Math.abs(orbit.position.y - 300) < 1e-6);
+    for (let i = 0; i < 2000; i += 1) {
+      const { x, y } = orbit.step(1 / 60);
+      assert.ok(x >= 30 - 1e-6 && x <= 770 + 1e-6 && y >= 30 - 1e-6 && y <= 570 + 1e-6, `x=${x} y=${y}`);
+    }
+  });
+
+  test('a correct answer names every shape type with its exact count', () => {
+    assert.equal(L.isCorrect(exact), true);
+  });
+
+  test('a wrong count, a missing type, an extra type or "nothing seen" is not correct', () => {
+    assert.equal(L.isCorrect({ ...exact, counts: { star: 4, circle: 5 } }), false);
+    assert.equal(L.isCorrect({ ...exact, counts: { star: 5 } }), false);
+    assert.equal(L.isCorrect({ ...exact, counts: { star: 5, circle: 5, square: 1 } }), false);
+    assert.equal(L.isCorrect({ ...exact, counts: {}, answer: 'none' }), false);
+  });
+
+  test('accuracy by shape counts each shape type in a trial separately', () => {
+    const trials = [
+      { ...exact, sizeDeg: 5 },
+      { ...exact, counts: { star: 4, circle: 5 }, sizeDeg: 5 },
+    ];
+    const rows = Object.fromEntries(L.accuracyByShape(trials).map((row) => [row.shape, row]));
+    assert.deepEqual([rows.star.shown, rows.star.correct], [2, 1]);
+    assert.deepEqual([rows.circle.shown, rows.circle.correct], [2, 2]);
+  });
+
+  test('a trial with counts validates, keeps its counts and is marked correct', () => {
+    const session = L.validateSession(sampleSession({ trials: [{ ...exact, sizeDeg: 5, filled: true, color: 'yellow', background: 'black', shownAt: '2026-02-01T10:00:01.000Z' }] }));
+    assert.equal(session.trials[0].correct, true);
+    assert.deepEqual(session.trials[0].targets, { star: 5, circle: 5 });
+  });
+
+  test('invalid: a count of 0 or 21 in a trial is rejected', () => {
+    const zero = { ...exact, targets: { star: 0, circle: 5 } };
+    const tooMany = { ...exact, targets: { star: 21, circle: 5 } };
+    assert.throws(() => L.validateSession(sampleSession({ trials: [{ ...zero, sizeDeg: 5, filled: true, color: 'yellow', background: 'black' }] })), L.ValidationError);
+    assert.throws(() => L.validateSession(sampleSession({ trials: [{ ...tooMany, sizeDeg: 5, filled: true, color: 'yellow', background: 'black' }] })), L.ValidationError);
+  });
+
+  test('invalid: an unknown shape in counts, or a missing answer, is rejected', () => {
+    const base = { sizeDeg: 5, filled: true, color: 'yellow', background: 'black' };
+    assert.throws(() => L.validateSession(sampleSession({ trials: [{ ...base, ...exact, counts: { blob: 1 } }] })), L.ValidationError);
+    assert.throws(() => L.validateSession(sampleSession({ trials: [{ ...base, targets: exact.targets, counts: exact.counts }] })), L.ValidationError);
+  });
+
+  test('the count setting accepts 1 to 20 and rejects 21', () => {
+    const settings = sampleSession().settings;
+    assert.equal(L.validateSession(sampleSession({ settings: { ...settings, count: 20 } })).settings.count, 20);
+    assert.throws(() => L.validateSession(sampleSession({ settings: { ...settings, count: 21 } })), L.ValidationError);
+  });
+
+  test('the HTML report shows the count per shape', () => {
+    const session = { id: 's4', ...sampleSession({ settings: { ...sampleSession().settings, count: 3 } }) };
+    const html = L.buildPersonReport({ ...PERSON, sessions: [session] });
+    assert.match(html, /Count per shape<\/dt><dd>3</);
   });
 });
 
