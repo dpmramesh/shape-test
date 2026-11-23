@@ -834,7 +834,7 @@
 
   // Sizes the shape stage so it never sits under the response bar or the Adjust panel.
   // The panel is a column on the right; the response bar is a strip along the bottom.
-  function layoutStage() {
+  function sizeStage() {
     const t = state.test;
     if (!t || !trialView) {
       return;
@@ -846,15 +846,30 @@
     cssVars.setProperty('--hud-h', `${hudHeight}px`);
     cssVars.setProperty('--panel-w', `${panelWidth}px`);
     trialView.resize(window.innerHeight - hudHeight, window.innerWidth - panelWidth);
-    // A smaller stage can leave shapes overlapping, so flag it.
-    if (t.current) {
-      const count = Object.values(t.current.targets).reduce((sum, n) => sum + n, 0);
-      const px = L.degToPx(t.current.sizeDeg, state.settings.viewingDistanceCm, t.pxPerCm);
-      const fit = stageFit(px, count);
-      if (!fit.fits) {
-        setHudMessage(fitMessage(t.current.sizeDeg, px, count, fit));
-      }
+  }
+
+  // Sizes the stage, then holds the shown trial if its shapes no longer fit the smaller stage.
+  function layoutStage() {
+    const t = state.test;
+    sizeStage();
+    if (!t || !trialView || !t.current) {
+      return;
     }
+    const count = Object.values(t.current.targets).reduce((sum, n) => sum + n, 0);
+    const px = L.degToPx(t.current.sizeDeg, state.settings.viewingDistanceCm, t.pxPerCm);
+    const fit = stageFit(px, count);
+    if (!fit.fits) {
+      holdTrial(t, fitMessage(t.current.sizeDeg, px, count, fit));
+    }
+  }
+
+  // Takes the shapes off the screen and waits. Nothing is drawn until the size or count changes so the trial fits.
+  function holdTrial(t, message) {
+    t.blocked = true;
+    t.current = null;
+    trialView.clear();
+    renderResponses();
+    setHudMessage(message);
   }
 
   function currentSizeDeg() {
@@ -1053,15 +1068,11 @@
     };
     // The response bar is laid out first, because its height sets the stage height. Only then is the stage checked.
     renderResponses();
-    layoutStage();
+    sizeStage();
     const fit = stageFit(px, count);
     if (!fit.fits) {
       // Nothing is drawn. Wait here until the operator makes the size smaller or the count lower.
-      t.blocked = true;
-      t.current = null;
-      trialView.clear();
-      renderResponses();
-      setHudMessage(fitMessage(sizeDeg, px, count, fit));
+      holdTrial(t, fitMessage(sizeDeg, px, count, fit));
       updateHud();
       return;
     }
@@ -1154,7 +1165,6 @@
     t.nextTimer = setTimeout(nextTrial, GAP_BETWEEN_TRIALS_MS);
   }
 
-  // Bigger or smaller by one level. In fixed mode this changes the size; in adaptive mode it nudges the staircase.
   // The next size level up (delta -1) or down (delta +1) from `deg`.
   function neighbourSizeDeg(deg, delta) {
     const levels = L.SIZE_LEVELS_DEG;

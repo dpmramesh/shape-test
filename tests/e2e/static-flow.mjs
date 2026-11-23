@@ -234,8 +234,12 @@ async function main() {
     await key('b');
     const sizeAfter = await evaluate(`document.getElementById('hud-status').textContent`);
     const refused = await evaluate(`document.getElementById('hud-message').textContent.includes('cannot fit')`);
-    assert.ok(sizeBefore !== sizeAfter || refused, 'bigger either changes the size or is refused with a reason');
-    step(refused ? 'bigger is refused when the shapes would overlap' : 'bigger changes the size of the shape on screen');
+    // The trial is on screen, so bigger is refused exactly when the next size would overlap, and then the size stays put.
+    assert.equal(sizeBefore !== sizeAfter, !refused, 'bigger changes the size exactly when it is not refused');
+    if (refused) {
+      assert.equal(sizeBefore, sizeAfter, 'a refused bigger leaves the size unchanged');
+    }
+    step(refused ? 'bigger is refused, and the size stays put, when the shapes would overlap' : 'bigger changes the size of the shape on screen');
 
     await evaluate(`document.querySelector('[data-action="live-set"][data-key="color"][data-value="red"]').click()`);
     const colourSelected = await evaluate(`document.querySelector('[data-action="live-set"][data-key="color"][data-value="red"]').getAttribute('aria-pressed')`);

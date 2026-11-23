@@ -311,6 +311,16 @@ describe('multiple shapes per trial', () => {
     assert.ok(Math.abs(orbit.position.x - 600) < 1e-6 && Math.abs(orbit.position.y - 300) < 1e-6);
   });
 
+  test('an orbit shape starting near an edge moves onto the largest orbit that stays on screen', () => {
+    // Centre (400, 300); the largest orbit that keeps size 60 on screen has radius 270. A start at x = 30 is radius 370.
+    const orbit = L.createMotion({ width: 800, height: 600, size: 60, speed: 100, pattern: 'orbit', start: { x: 30, y: 300 }, rng: () => 0.5 });
+    assert.ok(Math.abs(orbit.position.x - 130) < 1e-6 && Math.abs(orbit.position.y - 300) < 1e-6);
+    for (let i = 0; i < 2000; i += 1) {
+      const { x, y } = orbit.step(1 / 60);
+      assert.ok(x >= 30 - 1e-6 && x <= 770 + 1e-6 && y >= 30 - 1e-6 && y <= 570 + 1e-6, `x=${x} y=${y}`);
+    }
+  });
+
   test('a correct answer names every shape type with its exact count', () => {
     assert.equal(L.isCorrect(exact), true);
   });

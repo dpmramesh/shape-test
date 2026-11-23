@@ -231,9 +231,6 @@
 
   // ---------- layout ----------
 
-  // Centres for `count` shapes of `size` on a width x height stage. Tries every row count and keeps the grid
-  // whose smallest gap between neighbours is largest. Centres stay `size / 2` from each edge, so nothing is cropped.
-  // If the shape cannot fit, every centre falls at the middle, as the single-shape test always did.
   // The grid with the largest smallest gap between neighbours. Needs count > 1 and a stage at least `size` in each direction.
   function bestGrid(count, width, height, size) {
     const spanX = width - size;
@@ -251,6 +248,9 @@
     return best;
   }
 
+  // Centres for `count` shapes of `size` on a width x height stage. Tries every row count and keeps the grid
+  // whose smallest gap between neighbours is largest. Centres stay `size / 2` from each edge, so nothing is cropped.
+  // If the shape cannot fit, every centre falls at the middle, as the single-shape test always did.
   function gridPositions(count, width, height, size) {
     const half = size / 2;
     const spanX = width - size;
@@ -392,6 +392,8 @@
 
     if (pattern === 'orbit') {
       // A shape at the middle has no radius to start from, so it takes the default orbit.
+      // An orbit cannot leave the stage, so a start farther out than maxRadius moves onto the largest orbit that fits.
+      // That is a visible jump on the first frame, and it is the one exception to "starts from its layout position".
       const maxRadius = Math.max(0, Math.min(centreX - half, centreY - half));
       const startRadius = start ? Math.hypot(start.x - centreX, start.y - centreY) : 0;
       state.radius = startRadius > 0 ? Math.min(startRadius, maxRadius) : maxRadius * 0.8;
