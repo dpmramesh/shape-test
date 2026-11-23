@@ -24,7 +24,7 @@
   const SPEED_MAX = 1000;
 
   const DEFAULT_SETTINGS = {
-    shapes: [...L.SHAPE_KEYS],
+    shapes: ['circle'],
     count: 1,
     fill: 'filled',
     color: 'yellow',

@@ -198,6 +198,11 @@ async function main() {
 
     // A trial whose shapes would overlap is held back. Press S for a smaller size until it can be drawn.
     const showTrial = async (label) => {
+      // Wait for the next trial to be set up (drawn or held) before deciding whether to press S.
+      await waitFor(
+        `['Waiting for the answer', 'cannot fit'].some((text) => document.getElementById('hud-message').textContent.includes(text))`,
+        `${label}: trial set up`,
+      );
       let presses = 0;
       while (presses < 8 && (await evaluate(`document.getElementById('hud-message').textContent.includes('cannot fit')`))) {
         await key('s');
@@ -258,7 +263,7 @@ async function main() {
 
     await evaluate(`document.querySelector('[data-action="live-toggle-shape"][data-value="heart"]').click()`);
     const heartOn = await evaluate(`document.querySelector('[data-action="live-toggle-shape"][data-value="heart"]').getAttribute('aria-pressed')`);
-    assert.equal(heartOn, 'false', 'heart was on by default, so toggling turns it off');
+    assert.equal(heartOn, 'true', 'heart is off by default, so toggling turns it on');
     step('toggling a shape in the Adjust panel updates the selection');
 
     await evaluate(`
@@ -273,9 +278,9 @@ async function main() {
     await key('a');
     await waitFor(`document.getElementById('adjust').hidden`, 'adjust panel hidden');
     await key('0');
-    // The count of 2 applies to this trial: two of each shape type, 14 shapes. The test checks the stage first.
+    // The count of 2 applies to this trial: two circles and two hearts, 4 shapes. The test checks the stage first.
     const presses = await showTrial('third trial');
-    step(presses ? `14 shapes would overlap, so the trial was held until the size was smaller (${presses} S presses)` : 'a trial with 14 shapes is drawn without overlap');
+    step(presses ? `4 shapes would overlap, so the trial was held until the size was smaller (${presses} S presses)` : 'a trial with 4 shapes is drawn without overlap');
     const multiShot = await devtools.send('Page.captureScreenshot', { format: 'png' });
     const multiPath = path.join(os.tmpdir(), 'lvst-static-multi.png');
     await fs.writeFile(multiPath, Buffer.from(multiShot.data, 'base64'));

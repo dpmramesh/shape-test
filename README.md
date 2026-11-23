@@ -23,7 +23,7 @@ GitHub Pages serves over HTTPS, which the browser needs for some features. Nothi
 
 ### Setup (before the test)
 
-- **Shapes:** circle, square, triangle, diamond, star, hexagon, cross, heart. Choose any combination.
+- **Shapes:** circle, square, triangle, diamond, star, hexagon, cross, heart. Choose any combination. Only circle is selected by default.
 - **How many of each:** 1 to 20, default 1. The count applies to each selected shape type. Star at 5 shows 5 stars. Star and Circle at 5 shows 5 stars and 5 circles.
 - **Fill:** filled, outline, or mixed (random per shape).
 - **Colour and background:** eight shape colours and four backgrounds, for contrast testing.
