@@ -306,6 +306,51 @@ async function main() {
     assert.equal(counted.answer, 'counted');
     step('saved session keeps the shapes shown and the counts named');
 
+    // Opening Adjust mid-trial narrows the stage. The trial must be held if its shapes no longer fit.
+    await click('[data-action="setup"]');
+    await waitFor(`!!document.querySelector('.setup')`, 'setup screen for the stage-shrink check');
+    await evaluate(`document.querySelector('[data-action="set"][data-key="mode"][data-value="fixed"]').click()`);
+    await evaluate(`(() => {
+      const size = document.querySelector('[data-input="fixedSizeDeg"]');
+      size.value = '2';
+      size.dispatchEvent(new Event('input', { bubbles: true }));
+      const count = document.querySelector('[data-input="count"]');
+      count.value = '2';
+      count.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await click('[data-action="start-test"]');
+    await waitFor(`document.getElementById('hud-message').textContent.includes('Waiting for the answer')`, 'stage-shrink trial drawn');
+
+    // Grow the shapes until the next size would overlap on the full stage. The app refuses that size.
+    const hudStatus = () => evaluate(`document.getElementById('hud-status').textContent`);
+    for (let i = 0; i < 15; i += 1) {
+      const before = await hudStatus();
+      await key('b');
+      await sleep(200);
+      if ((await hudStatus()) === before) {
+        break;
+      }
+    }
+    // A drawn trial lists its shape types in the response bar. A held trial lists none.
+    const shapeButtons = () => evaluate(`document.querySelectorAll('#responses [data-action="count"]').length`);
+    assert.ok((await shapeButtons()) > 0, 'the trial is drawn before Adjust opens');
+
+    await key('a');
+    await waitFor(`!document.getElementById('adjust').hidden`, 'adjust panel visible for the stage-shrink check');
+    await sleep(400);
+    const held = (await shapeButtons()) === 0;
+    const fitsNow = await evaluate(`(() => {
+      const stage = document.getElementById('stage');
+      const px = Number(document.getElementById('hud-status').textContent.match(/\\((\\d+) px\\)/)[1]);
+      const settings = JSON.parse(localStorage.getItem('lowVisionShapeTest.settings'));
+      return window.LVST.layoutFit(settings.shapes.length * settings.count, stage.width, stage.height, px).fits;
+    })()`);
+    assert.equal(held, !fitsNow, `held exactly when the shapes no longer fit the stage (held=${held}, fits=${fitsNow})`);
+    step(held ? 'opening Adjust holds the trial when the shapes no longer fit the stage' : 'opening Adjust keeps the trial drawn because the shapes still fit');
+
+    await key('Escape');
+    await waitFor(`!!document.querySelector('[data-action="save-session"]')`, 'results after the stage-shrink check');
+
     assert.deepEqual(errors, [], `browser reported errors: ${errors.join(' | ')}`);
     step('no JavaScript errors in the browser console');
     return 0;
