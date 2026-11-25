@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Remote key check</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main>
+    <section class="screen">
+      <h1>Remote key check</h1>
+      <p class="muted">Press a button on the remote or keyboard. Each press is listed below with the name the browser gives it. Use these names when mapping keys in the shape test.</p>
+      <p class="privacy">If the Back button leaves this page, the browser handled it. No row is added for that press.</p>
+      <div class="row wrap">
+        <a class="button primary" href="index.html" autofocus>Back to the shape test</a>
+        <button type="button" id="clear">Clear list</button>
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Key</th><th>Code</th><th>Key code</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    // Shows the last presses. Values are written as text, never as HTML.
+    const MAX_ROWS = 20;
+    const rows = document.getElementById('rows');
+    document.addEventListener('keydown', (event) => {
+      const row = document.createElement('tr');
+      [new Date().toLocaleTimeString(), event.key, event.code, event.keyCode].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = String(value);
+        row.appendChild(cell);
+      });
+      rows.prepend(row);
+      while (rows.children.length > MAX_ROWS) {
+        rows.lastElementChild.remove();
+      }
+    });
+    document.getElementById('clear').addEventListener('click', () => {
+      rows.replaceChildren();
+    });
+  </script>
+</body>
+</html>

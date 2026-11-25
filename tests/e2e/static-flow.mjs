@@ -367,7 +367,59 @@ async function main() {
     assert.deepEqual([guest.age, guest.gender, guest.visionLevel, guest.issues, guest.notes], [null, null, null, null, null], 'the guest profile has no details');
     step('guest test starts from home with no details to enter');
 
-    assert.deepEqual(errors, [], `browser reported errors: ${errors.join(' | ')}`);
+    // Reset puts the settings back to the defaults, here the yellow colour.
+    await evaluate(`document.querySelector('[data-action="set"][data-key="color"][data-value="red"]').click()`);
+    await click('[data-action="reset-settings"]');
+    const resetColour = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.settings')).color`);
+    assert.equal(resetColour, 'yellow', 'reset restores the default colour');
+    step('reset settings restores the defaults');
+
+    // A test can be paused to change settings. Resume applies them, and the trial in progress is not recorded.
+    await click('[data-action="start-test"]');
+    await waitFor(`document.getElementById('hud-status')?.textContent.includes('Trial 1')`, 'guest test running');
+    await click('[data-action="change-settings"]');
+    await waitFor(`!!document.querySelector('[data-action="resume-test"]') && !document.querySelector('[data-action="start-test"]')`, 'paused setup screen');
+    const pausedTypeChips = await evaluate(`!!document.querySelector('[data-action="set"][data-key="mode"]')`);
+    assert.equal(pausedTypeChips, false, 'the test type is not changeable while paused');
+    await evaluate(`document.querySelector('[data-action="set"][data-key="color"][data-value="green"]').click()`);
+    await click('[data-action="resume-test"]');
+    await waitFor(`document.getElementById('hud-status')?.textContent.includes('Trial 1')`, 'resumed test');
+    const pausedColour = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.settings')).color`);
+    assert.equal(pausedColour, 'green', 'settings changed while paused are kept on resume');
+    step('a test can be paused to change settings and resumed with them');
+
+    // Fire TV remote keys: Menu opens the Adjust panel, Back closes it first, and Play/Pause pauses and resumes the test.
+    await key('ContextMenu');
+    await waitFor(`!document.getElementById('adjust').hidden`, 'Menu key opens the Adjust panel');
+    await key('Escape');
+    await waitFor(`document.getElementById('adjust').hidden`, 'Back closes the Adjust panel first');
+    await waitFor(`document.getElementById('hud-status')?.textContent.includes('Trial 1')`, 'test still running after Back');
+    await key('MediaPlayPause');
+    await waitFor(`document.getElementById('btn-pause').textContent.includes('Resume')`, 'Play/Pause pauses the test');
+    await key('MediaPlayPause');
+    await waitFor(`document.getElementById('btn-pause').textContent.includes('Pause (P)')`, 'Play/Pause resumes the test');
+    step('Fire TV keys: Menu opens Adjust, Back closes it, Play/Pause pauses and resumes');
+
+    // End the guest test and discard it, so the run leaves no session behind. Confirm is answered yes, since the page cannot show it.
+    await key('Escape');
+    await waitFor(`!!document.querySelector('[data-action="discard-session"]')`, 'results screen for guest');
+    await evaluate(`window.confirm = () => true`);
+    await click('[data-action="discard-session"]');
+    await waitFor(`!!document.querySelector('[data-action="setup"]')`, 'person screen after discard');
+    const guestSessions = await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.records.v1')).people[1].sessions.length`);
+    assert.equal(guestSessions, 0, 'a discarded guest session is not saved');
+    step('ending and discarding a guest test saves nothing');
+
+    // The home screen links to the remote key check page, which lists each key press.
+    await click('[data-action="nav-home"]');
+    await waitFor(`!!document.querySelector('a[href="keys.html"]')`, 'home screen link to the key check page');
+    await devtools.send('Page.navigate', { url: new URL('keys.html', indexUrl).href });
+    await waitFor(`document.querySelector('h1')?.textContent === 'Remote key check'`, 'key check page');
+    await key('ArrowDown');
+    await waitFor(`document.getElementById('rows').textContent.includes('ArrowDown')`, 'key check page lists the press');
+    step('home links to the remote key check page, which lists key presses');
+
+    assert.deepEqual(errors, [],`browser reported errors: ${errors.join(' | ')}`);
     step('no JavaScript errors in the browser console');
     return 0;
   } catch (err) {
