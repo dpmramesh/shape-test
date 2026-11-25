@@ -70,6 +70,11 @@ Every trial stores the settings in effect when it was shown: shape, size, fill, 
 | `U` | Seen but not identified |
 | `P` | Pause or resume |
 | `A` | Show or hide the Adjust panel |
+| Fire TV Menu (`ContextMenu`) | Show or hide the Adjust panel |
+| Fire TV Play/Pause (`MediaPlayPause`) | Pause or resume the test |
+| `Esc` or Fire TV Back | Close the Adjust panel if it is open, otherwise end the test |
+
+To check which key names a remote sends, open **Check remote keys** on the home screen (`docs/keys.html`). Each press is listed with its `key` and `code`.
 | `B` / `S` | Bigger / smaller |
 | `H` | Hide or show the controls |
 | `Esc` or Back | End the test |

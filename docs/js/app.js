@@ -95,6 +95,8 @@
     person: null,
     settings: loadSettings(),
     test: null,
+    // A test put on hold to change settings. It is resumed or ended from the setup screen.
+    pausedTest: null,
     result: null,
   };
   let trialView = null;
@@ -291,6 +293,7 @@
           <button data-action="guest-test" data-focus-id="guest-test">Guest test (no details)</button>
           <button data-action="download-backup" data-focus-id="backup">Download backup</button>
           <button data-action="import-pick" data-focus-id="restore">Restore from backup</button>
+          <a class="button" href="keys.html" data-focus-id="check-keys">Check remote keys</a>
           <input type="file" id="import-file" accept="application/json,.json" hidden>
         </div>
         ${
@@ -525,11 +528,17 @@
 
   function renderSetup() {
     const s = state.settings;
-    const adaptive = s.mode === 'adaptive';
+    const adaptive = (state.pausedTest ? state.pausedTest.mode : s.mode) === 'adaptive';
     const pxPerCm = calibrationValid(s) ? pxPerCmFor(s) : null;
     render(`
       <section class="screen setup">
         <h1>Test setup for ${esc(state.person.name)}</h1>
+        ${
+          state.pausedTest
+            ? `<p class="notice warn" role="status">The test is paused. Changes here apply when you resume. The trial in progress was not recorded.</p>`
+            : ''
+        }
+        <div class="setup-grid">
         <fieldset>
           <legend>Shapes to show (choose one or more)</legend>
           <div class="chips">${L.SHAPES.map((shape) =>
@@ -569,7 +578,14 @@
             <output id="speed-label">${esc(speedLabelFor(s))}</output>
           </label>
         </fieldset>
-        <fieldset>
+        ${
+          // A paused test keeps its type and starting size, so those controls are not offered until it ends.
+          state.pausedTest
+            ? `<fieldset>
+          <legend>Test type</legend>
+          <p class="muted">${adaptive ? 'Adaptive' : 'Fixed'} test. The type and starting size stay the same for this test. End it to change them.</p>
+        </fieldset>`
+            : `<fieldset>
           <legend>Test type</legend>
           <div class="chips">
             ${chip({ action: 'set', key: 'mode', value: 'adaptive', label: 'Adaptive: size changes automatically', selected: adaptive })}
@@ -583,7 +599,8 @@
               }).join('')}
             </select>
           </label>
-        </fieldset>
+        </fieldset>`
+        }
         <fieldset>
           <legend>Calibration</legend>
           <label>Viewing distance from the screen (cm)
@@ -594,10 +611,17 @@
           </label>
           <p id="calibration" class="muted">${esc(calibrationText(s))}</p>
         </fieldset>
+        </div>
         <p class="muted">During the test you can change shapes, colour, fill, speed and size with the Adjust panel, without leaving the test.</p>
-        <div class="row">
-          <button data-action="back-to-person">Back</button>
-          <button class="primary" data-action="start-test" data-focus-id="start-test">Start test</button>
+        <div class="row wrap">
+          ${
+            state.pausedTest
+              ? `<button class="primary" data-action="resume-test" data-focus-id="resume-test" autofocus>Resume test</button>
+                 <button class="danger" data-action="end-paused-test" data-focus-id="end-paused-test">End test and review results</button>`
+              : `<button data-action="back-to-person" data-focus-id="back-to-person">Back</button>
+                 <button class="primary" data-action="start-test" data-focus-id="start-test">Start test</button>`
+          }
+          <button data-action="reset-settings" data-focus-id="reset-settings">Reset settings to defaults</button>
         </div>
       </section>`);
   }
@@ -794,6 +818,64 @@
     nextTrial();
   }
 
+  // Puts the test on hold and shows the setup screen, so settings can be changed. The trial in progress is not recorded.
+  // Shapes, count and motion take effect from the next trial when the test resumes.
+  function pauseForSettings() {
+    const t = state.test;
+    if (!t) {
+      return;
+    }
+    clearTimeout(t.nextTimer);
+    t.current = null;
+    trialView.clear();
+    trialView.stop();
+    trialView = null;
+    state.pausedTest = t;
+    state.test = null;
+    setNotice('');
+    state.screen = 'setup';
+    renderSetup();
+  }
+
+  function resumeTest() {
+    const t = state.pausedTest;
+    if (!t) {
+      return;
+    }
+    state.pausedTest = null;
+    state.test = t;
+    // The calibration may have changed while paused, so the size of a degree is worked out again.
+    if (calibrationValid(state.settings)) {
+      t.pxPerCm = pxPerCmFor(state.settings);
+    }
+    state.screen = 'test';
+    renderTestScreen();
+    nextTrial();
+  }
+
+  // The paused test is brought back on screen only long enough to finish it the usual way, so the results can be saved or discarded.
+  function endPausedTest() {
+    if (!state.pausedTest) {
+      return;
+    }
+    resumeTest();
+    finishTest();
+  }
+
+  // Back to the defaults, as on first use. Calibration is included. The test in progress keeps its current size.
+  function resetSettings() {
+    state.settings = { ...DEFAULT_SETTINGS, shapes: [...DEFAULT_SETTINGS.shapes] };
+    saveSettings();
+    if (state.test) {
+      ['color', 'background', 'fill', 'speed', 'viewingDistanceCm'].forEach(applyLive);
+      renderAdjust();
+      updateHud();
+    } else if (state.screen === 'setup') {
+      renderSetup();
+    }
+    setNotice('Settings reset to the defaults.', 'ok');
+  }
+
   function renderTestScreen() {
     render(
       `<div class="test-screen" id="test-screen">
@@ -804,6 +886,7 @@
           <div class="controls">
             <button type="button" data-action="toggle-pause" data-focus-id="ctl:pause" id="btn-pause">Pause (P)</button>
             <button type="button" data-action="toggle-adjust" data-focus-id="ctl:adjust" id="btn-adjust">Adjust (A)</button>
+            <button type="button" data-action="change-settings" data-focus-id="ctl:settings">Change settings</button>
             <button type="button" data-action="toggle-hud" data-focus-id="ctl:hud">Hide controls (H)</button>
             <button type="button" class="danger" data-action="end-test" data-focus-id="ctl:end">End test (Esc)</button>
           </div>
@@ -941,6 +1024,9 @@
     replaceKeepingFocus(
       document.getElementById('adjust'),
       `<div class="adjust-grid">
+        <div class="row">
+          <button type="button" data-action="reset-settings" data-focus-id="adjust:reset">Reset settings to defaults</button>
+        </div>
         <fieldset>
           <legend>Shapes (from next trial)</legend>
           <div class="chips">${L.SHAPES.map((shape) =>
@@ -1378,6 +1464,10 @@
       renderSetup();
     },
     'start-test': () => startTest(),
+    'resume-test': () => resumeTest(),
+    'end-paused-test': () => endPausedTest(),
+    'change-settings': () => pauseForSettings(),
+    'reset-settings': () => resetSettings(),
     respond: (el) => respond(el.dataset.value),
     count: (el) => countShape(el.dataset.value),
     record: () => recordAnswer(),
@@ -1582,11 +1672,22 @@
       case 'S':
         changeSize('smaller');
         return true;
+      // Fire TV remote: the Menu button opens the Adjust panel, Play/Pause pauses the test, and Back closes the panel first.
+      case 'ContextMenu':
+        toggleAdjust();
+        return true;
+      case 'MediaPlayPause':
+        togglePause();
+        return true;
       case 'Escape':
       case 'Backspace':
       case 'BrowserBack':
       case 'GoBack':
-        endTest();
+        if (state.test.adjustVisible) {
+          toggleAdjust();
+        } else {
+          endTest();
+        }
         return true;
       default:
         return false;
