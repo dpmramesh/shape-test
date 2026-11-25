@@ -288,6 +288,7 @@
         <p class="privacy">Records are saved only in this browser on this device. Nothing is uploaded. Download a backup to keep a copy or move records to another device.</p>
         <div class="row wrap">
           <button class="primary" data-action="new-person" data-focus-id="new-person" autofocus>+ New person</button>
+          <button data-action="guest-test" data-focus-id="guest-test">Guest test (no details)</button>
           <button data-action="download-backup" data-focus-id="backup">Download backup</button>
           <button data-action="import-pick" data-focus-id="restore">Restore from backup</button>
           <input type="file" id="import-file" accept="application/json,.json" hidden>
@@ -311,6 +312,19 @@
             : '<p>No people yet. Add a person to start.</p>'
         }
       </section>`);
+  }
+
+  // A guest profile needs only a name, which is filled in from the time, so the test can start straight away.
+  // It is saved like any other person, so its trials are kept and it can be deleted later.
+  function startGuestTest() {
+    setNotice('');
+    try {
+      state.person = store.createPerson({ name: `Guest ${formatDate(new Date().toISOString())}` });
+    } catch (err) {
+      setNotice(err.details ? errorText(err) : err.message);
+      return;
+    }
+    showSetup(state.person.id);
   }
 
   // ---------- person screens ----------
@@ -1206,10 +1220,15 @@
     updateHud();
   }
 
+  // A message can wrap onto more lines, which makes the response bar taller. The stage and panel are sized from the bar's
+  // height, so they are laid out again after every message change.
   function setHudMessage(message) {
     const el = document.getElementById('hud-message');
     if (el) {
       el.textContent = message;
+    }
+    if (state.test) {
+      layoutStage();
     }
   }
 
@@ -1336,6 +1355,7 @@
   const actions = {
     'nav-home': () => showHome(),
     'new-person': () => showPersonForm(null),
+    'guest-test': () => startGuestTest(),
     'open-person': (el) => openPerson(el.dataset.id),
     'edit-person': () => showPersonForm(state.person),
     'cancel-form': () => (state.person ? renderPersonDetail() : showHome()),
