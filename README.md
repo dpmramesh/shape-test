@@ -51,6 +51,7 @@ Every trial stores the settings in effect when it was shown: shape, size, fill, 
 ### People and reports
 
 - Each person has name, age, gender, current vision level, issues and notes.
+- **Guest test:** on the home screen, **Guest test (no details)** creates a person named `Guest` with the date and time, with no other details, and goes straight to setup. Guest records are saved like any other person and can be deleted from their record.
 - Each session keeps its date, settings and every trial.
 - **Download report (HTML):** printable report with a progress chart, threshold trend, and accuracy by size and by shape. Open it and use Print to save as PDF.
 - **Download trials (CSV):** one row per trial, safe to open in a spreadsheet. `shapes_shown` and `answer` list each shape type with its count, for example `circle:5;star:5`. An answer of `none` or `unsure` is written as is.
@@ -120,7 +121,7 @@ Browser check (needs Microsoft Edge or Google Chrome installed; skips otherwise)
 npm run e2e
 ```
 
-It opens `docs/index.html` straight from disk with no server, creates a person, runs a test, uses the Adjust controls, saves the session, and checks that no JavaScript errors occurred.
+It opens `docs/index.html` straight from disk with no server, creates a person, runs a test, uses the Adjust controls, checks that opening Adjust on a drawn trial either keeps it drawn within the narrower stage or holds it, saves the session, starts a guest test, and checks that no JavaScript errors occurred.
 
 `npm` is optional for the app itself. It is only used to run the tests above, and the project has no dependencies to install.
 

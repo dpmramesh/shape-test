@@ -281,6 +281,53 @@ async function main() {
     // The count of 2 applies to this trial: two circles and two hearts, 4 shapes. The test checks the stage first.
     const presses = await showTrial('third trial');
     step(presses ? `4 shapes would overlap, so the trial was held until the size was smaller (${presses} S presses)` : 'a trial with 4 shapes is drawn without overlap');
+
+    // Opening Adjust narrows the stage while a trial is drawn. The trial must then still fit, or be held with "cannot fit".
+    // Bigger until it is refused, so the size is as large as the full stage allows and the narrower stage is most likely to be too small.
+    let growPresses = 0;
+    while (growPresses < 12 && !(await evaluate(`document.getElementById('hud-message').textContent.includes('cannot fit')`))) {
+      await key('b');
+      growPresses += 1;
+      await sleep(100);
+    }
+    const fullWidth = await evaluate(`document.getElementById('stage').width`);
+    // Clear the message first, so a stale "cannot fit" from the refused bigger cannot be mistaken for a hold.
+    await evaluate(`document.getElementById('hud-message').textContent = 'no check yet'`);
+    await key('a');
+    await waitFor(`!document.getElementById('adjust').hidden`, 'adjust panel visible for stage check');
+    await sleep(200);
+    const stage = await evaluate(`(() => {
+      const canvas = document.getElementById('stage');
+      const settings = JSON.parse(localStorage.getItem('lowVisionShapeTest.settings'));
+      const px = Number(document.getElementById('hud-status').textContent.match(/\\((\\d+) px\\)/)[1]);
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        px,
+        count: settings.shapes.length * settings.count,
+        held: document.getElementById('hud-message').textContent.includes('cannot fit'),
+      };
+    })()`);
+    assert.ok(stage.width < fullWidth, 'opening Adjust narrows the stage');
+    // The stage and panel must end above the response bar, as laid out on screen, including after the message changed.
+    const edges = await evaluate(`(() => {
+      const box = (id) => document.getElementById(id).getBoundingClientRect();
+      return { hudTop: box('hud').top, stageBottom: box('stage').bottom, panelBottom: box('adjust').bottom };
+    })()`);
+    assert.ok(edges.stageBottom <= edges.hudTop + 0.5, `stage ends at ${edges.stageBottom}, under the response bar at ${edges.hudTop}`);
+    assert.ok(edges.panelBottom <= edges.hudTop + 0.5, `Adjust panel ends at ${edges.panelBottom}, under the response bar at ${edges.hudTop}`);
+    const fitsNarrow = await evaluate(
+      `window.LVST.layoutFit(${stage.count}, ${stage.width}, ${stage.height}, ${stage.px}).fits`,
+    );
+    assert.equal(stage.held, !fitsNarrow, `at ${stage.px} px the trial is held exactly when ${stage.count} shapes do not fit the narrower stage`);
+    if (stage.held) {
+      await showTrial('trial held after Adjust opened');
+      step(`opening Adjust holds the trial, and a smaller size draws it again (${stage.count} shapes, ${stage.px} px)`);
+    } else {
+      step(`opening Adjust keeps the trial drawn, because ${stage.count} shapes still fit the narrower stage`);
+    }
+    await key('a');
+    await waitFor(`document.getElementById('adjust').hidden`, 'adjust panel hidden after stage check');
     const multiShot = await devtools.send('Page.captureScreenshot', { format: 'png' });
     const multiPath = path.join(os.tmpdir(), 'lvst-static-multi.png');
     await fs.writeFile(multiPath, Buffer.from(multiShot.data, 'base64'));
@@ -305,6 +352,20 @@ async function main() {
     assert.deepEqual(counted.counts, { circle: 2 });
     assert.equal(counted.answer, 'counted');
     step('saved session keeps the shapes shown and the counts named');
+
+    await click('[data-action="nav-home"]');
+    await waitFor(`!!document.querySelector('[data-action="guest-test"]')`, 'home screen before guest test');
+    await click('[data-action="guest-test"]');
+    await waitFor(`!!document.querySelector('.setup')`, 'setup screen for guest');
+    const guest = await evaluate(`(() => {
+      const people = JSON.parse(localStorage.getItem('lowVisionShapeTest.records.v1')).people;
+      const person = people[people.length - 1];
+      return { count: people.length, name: person.name, age: person.age, gender: person.gender, visionLevel: person.visionLevel, issues: person.issues, notes: person.notes };
+    })()`);
+    assert.equal(guest.count, 2, 'the guest profile is saved as a new person');
+    assert.match(guest.name, /^Guest /, 'the guest profile is named Guest');
+    assert.deepEqual([guest.age, guest.gender, guest.visionLevel, guest.issues, guest.notes], [null, null, null, null, null], 'the guest profile has no details');
+    step('guest test starts from home with no details to enter');
 
     assert.deepEqual(errors, [], `browser reported errors: ${errors.join(' | ')}`);
     step('no JavaScript errors in the browser console');
