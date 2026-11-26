@@ -230,6 +230,8 @@ async function main() {
     await waitFor(`!document.getElementById('adjust').hidden`, 'adjust panel visible');
     step('A opens the Adjust panel');
     await sleep(300);
+    const panelFit = await evaluate(`(() => { const p = document.getElementById('adjust'); return { scroll: p.scrollHeight, shown: p.clientHeight }; })()`);
+    console.log(`  info settings panel: ${panelFit.scroll} px of content in ${panelFit.shown} px (${panelFit.scroll <= panelFit.shown ? 'no scrolling' : 'scrolls'})`);
     const shot = await devtools.send('Page.captureScreenshot', { format: 'png' });
     const shotPath = path.join(os.tmpdir(), 'lvst-static-adjust.png');
     await fs.writeFile(shotPath, Buffer.from(shot.data, 'base64'));
@@ -264,7 +266,13 @@ async function main() {
     await evaluate(`document.querySelector('[data-action="live-toggle-shape"][data-value="heart"]').click()`);
     const heartOn = await evaluate(`document.querySelector('[data-action="live-toggle-shape"][data-value="heart"]').getAttribute('aria-pressed')`);
     assert.equal(heartOn, 'true', 'heart is off by default, so toggling turns it on');
-    step('toggling a shape in the Adjust panel updates the selection');
+    // The trial on screen is the same one, so the change reaches it at once: the new shape type is either on the
+    // trial (listed for the answer) or the trial is held because the bigger set of shapes does not fit the narrower stage.
+    const heartApplied = await evaluate(
+      `document.getElementById('responses').textContent.includes('Heart') || document.getElementById('hud-message').textContent.includes('cannot fit')`,
+    );
+    assert.ok(heartApplied, 'a shape turned on in the settings panel reaches the trial straight away');
+    step('toggling a shape in the settings panel changes the trial at once');
 
     await evaluate(`
       const count = document.querySelector('#adjust select[data-input="count"]');
@@ -275,12 +283,20 @@ async function main() {
     assert.equal(savedCount, 2);
     step('changing the count of each shape in the Adjust panel is remembered');
 
+    await evaluate(`document.querySelector('[data-action="live-set"][data-key="pattern"][data-value="sweep"]').click()`);
+    const sweepOn = await evaluate(`document.querySelector('[data-action="live-set"][data-key="pattern"][data-value="sweep"]').getAttribute('aria-pressed')`);
+    assert.equal(sweepOn, 'true', 'motion changes take effect straight away');
+    assert.equal(await evaluate(`JSON.parse(localStorage.getItem('lowVisionShapeTest.settings')).pattern`), 'sweep');
+    step('changing the motion in the Adjust panel is remembered and selected at once');
+
     await key('a');
     await waitFor(`document.getElementById('adjust').hidden`, 'adjust panel hidden');
-    await key('0');
-    // The count of 2 applies to this trial: two circles and two hearts, 4 shapes. The test checks the stage first.
-    const presses = await showTrial('third trial');
+    // The count of 2 applies to the trial on screen straight away: two circles and two hearts, 4 shapes. The test checks the stage first.
+    const presses = await showTrial('second trial with count 2');
     step(presses ? `4 shapes would overlap, so the trial was held until the size was smaller (${presses} S presses)` : 'a trial with 4 shapes is drawn without overlap');
+    await key('0');
+    await waitFor(`document.getElementById('hud-message').textContent.includes('Recorded: nothing seen')`, 'second trial recorded');
+    await showTrial('third trial');
 
     // Opening Adjust narrows the stage while a trial is drawn. The trial must then still fit, or be held with "cannot fit".
     // Bigger until it is refused, so the size is as large as the full stage allows and the narrower stage is most likely to be too small.
@@ -399,6 +415,19 @@ async function main() {
     await key('MediaPlayPause');
     await waitFor(`document.getElementById('btn-pause').textContent.includes('Pause (P)')`, 'Play/Pause resumes the test');
     step('Fire TV keys: Menu opens Adjust, Back closes it, Play/Pause pauses and resumes');
+
+    // The settings button stays on the right edge while the test runs, even with the controls hidden, and opens and closes the panel.
+    await key('h');
+    await waitFor(`document.getElementById('hud').classList.contains('hidden-controls')`, 'controls hidden');
+    const tabOnRightEdge = await evaluate(`(() => { const r = document.getElementById('btn-adjust').getBoundingClientRect(); return r.width > 0 && r.right <= window.innerWidth && r.top >= 0; })()`);
+    assert.ok(tabOnRightEdge, 'the settings button is on the right edge with the controls hidden');
+    await click('#btn-adjust');
+    await waitFor(`!document.getElementById('adjust').hidden`, 'settings button opens the panel');
+    assert.equal(await evaluate(`document.getElementById('btn-adjust').getAttribute('aria-expanded')`), 'true');
+    await click('#btn-adjust');
+    await waitFor(`document.getElementById('adjust').hidden`, 'settings button closes the panel');
+    await key('h');
+    step('the settings button stays on the right edge while the test runs, and opens and closes the panel');
 
     // End the guest test and discard it, so the run leaves no session behind. Confirm is answered yes, since the page cannot show it.
     await key('Escape');

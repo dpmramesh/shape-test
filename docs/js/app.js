@@ -151,7 +151,7 @@
       return '';
     }
     const at = `${formatDeg(sizeDeg)} (${Math.round(px)} px)`;
-    const hint = 'Press S for a smaller size, or lower the count in the Adjust panel.';
+    const hint = 'Press S for a smaller size, or lower the count in the settings panel.';
     return fit.reason === 'too-big'
       ? `At ${at} one shape is wider than the screen. ${hint}`
       : `At ${at}, ${count} shapes cannot fit on this screen without overlapping. ${hint}`;
@@ -612,7 +612,7 @@
           <p id="calibration" class="muted">${esc(calibrationText(s))}</p>
         </fieldset>
         </div>
-        <p class="muted">During the test you can change shapes, colour, fill, speed and size with the Adjust panel, without leaving the test.</p>
+        <p class="muted">During the test you can change shapes, colour, fill, speed and size with the settings button on the right, without leaving the test.</p>
         <div class="row wrap">
           ${
             state.pausedTest
@@ -726,13 +726,26 @@
       ensureLoop();
     }
 
-    // Changes what is drawn right now: size, colour, fill, background. A new size re-lays out the shapes.
+    // Changes what is drawn right now: size, shapes, colour, fill, background, motion. A new size or new shapes re-lay out the shapes.
+    // A new motion pattern keeps every shape where it is and moves it on from there.
     function update(partial) {
       if (trial) {
-        const resized = partial.sizePx !== undefined && partial.sizePx !== trial.sizePx;
+        const relaid = (partial.sizePx !== undefined && partial.sizePx !== trial.sizePx) || partial.shapes !== undefined;
+        const repatterned = partial.pattern !== undefined && partial.pattern !== trial.pattern;
         Object.assign(trial, partial);
-        if (resized) {
+        if (relaid) {
           build();
+        } else if (repatterned) {
+          for (const item of trial.items) {
+            item.motion = L.createMotion({
+              width: canvas.width,
+              height: canvas.height,
+              size: trial.sizePx,
+              speed: trial.speed,
+              pattern: trial.pattern,
+              start: item.motion.position,
+            });
+          }
         }
         paint();
       }
@@ -868,6 +881,7 @@
     saveSettings();
     if (state.test) {
       ['color', 'background', 'fill', 'speed', 'viewingDistanceCm'].forEach(applyLive);
+      applyTrialShapesNow();
       renderAdjust();
       updateHud();
     } else if (state.screen === 'setup') {
@@ -885,7 +899,6 @@
           <div class="responses" id="responses" aria-label="Person's answer"></div>
           <div class="controls">
             <button type="button" data-action="toggle-pause" data-focus-id="ctl:pause" id="btn-pause">Pause (P)</button>
-            <button type="button" data-action="toggle-adjust" data-focus-id="ctl:adjust" id="btn-adjust">Adjust (A)</button>
             <button type="button" data-action="change-settings" data-focus-id="ctl:settings">Change settings</button>
             <button type="button" data-action="toggle-hud" data-focus-id="ctl:hud">Hide controls (H)</button>
             <button type="button" class="danger" data-action="end-test" data-focus-id="ctl:end">End test (Esc)</button>
@@ -893,6 +906,7 @@
           <p id="hud-message" class="hud-message" role="status"></p>
         </div>
         <div id="adjust" class="adjust" hidden></div>
+        <button type="button" class="settings-tab" data-action="toggle-adjust" data-focus-id="ctl:adjust" id="btn-adjust" aria-label="Show settings" aria-expanded="false" title="Settings (A)">&#9881;</button>
       </div>`,
       { fallbackFocus: false },
     );
@@ -929,8 +943,8 @@
     );
   }
 
-  // Sizes the shape stage so it never sits under the response bar or the Adjust panel.
-  // The panel is a column on the right; the response bar is a strip along the bottom.
+  // Sizes the shape stage so it never sits under the response bar, the settings panel or the settings button.
+  // The button is a tab on the right edge; the panel is a column beside it; the response bar is a strip along the bottom.
   function sizeStage() {
     const t = state.test;
     if (!t || !trialView) {
@@ -938,11 +952,14 @@
     }
     const hud = document.getElementById('hud');
     const hudHeight = hud && t.hudVisible ? hud.offsetHeight : 0;
-    const panelWidth = t.adjustVisible ? Math.min(Math.round(window.innerWidth * 0.4), 620) : 0;
+    const tab = document.getElementById('btn-adjust');
+    const tabWidth = tab ? tab.offsetWidth : 0;
+    const panelWidth = t.adjustVisible ? Math.min(Math.round(window.innerWidth * 0.55), 900) : 0;
     const cssVars = document.documentElement.style;
     cssVars.setProperty('--hud-h', `${hudHeight}px`);
     cssVars.setProperty('--panel-w', `${panelWidth}px`);
-    trialView.resize(window.innerHeight - hudHeight, window.innerWidth - panelWidth);
+    cssVars.setProperty('--tab-w', `${tabWidth}px`);
+    trialView.resize(window.innerHeight - hudHeight, window.innerWidth - panelWidth - tabWidth);
   }
 
   // Sizes the stage, then holds the shown trial if its shapes no longer fit the smaller stage.
@@ -1004,7 +1021,9 @@
     updateStatusLine();
     document.getElementById('hud').classList.toggle('hidden-controls', !t.hudVisible);
     document.getElementById('btn-pause').textContent = t.paused ? 'Resume (P)' : 'Pause (P)';
-    document.getElementById('btn-adjust').textContent = t.adjustVisible ? 'Hide adjust (A)' : 'Adjust (A)';
+    const settingsTab = document.getElementById('btn-adjust');
+    settingsTab.setAttribute('aria-label', t.adjustVisible ? 'Hide settings' : 'Show settings');
+    settingsTab.setAttribute('aria-expanded', String(t.adjustVisible));
     const adjust = document.getElementById('adjust');
     adjust.hidden = !t.adjustVisible;
     if (t.adjustVisible) {
@@ -1014,79 +1033,79 @@
     layoutStage();
   }
 
-  // The Adjust panel. Colour, fill, speed, size and calibration apply to the shape on screen now.
-  // Shapes, count and motion pattern apply from the next trial, so the person is not asked about a changed shape mid-answer.
+  // The settings panel. Every control applies to the test on screen straight away: shapes, count and motion re-lay out
+  // the shapes, and colour, fill, background, speed, size and calibration change the shapes in place.
+  // All options are in one view, so nothing needs scrolling on a TV.
   function renderAdjust() {
     const s = state.settings;
-    const t = state.test;
     const pxPerCm = calibrationValid(s) ? pxPerCmFor(s) : null;
-    const sizeNote = t.mode === 'adaptive' ? 'Moves the staircase level without counting as a reversal.' : 'Changes the fixed size.';
     replaceKeepingFocus(
       document.getElementById('adjust'),
       `<div class="adjust-grid">
-        <div class="row">
-          <button type="button" data-action="reset-settings" data-focus-id="adjust:reset">Reset settings to defaults</button>
-        </div>
-        <fieldset>
-          <legend>Shapes (from next trial)</legend>
+        <fieldset class="wide">
+          <legend>Shapes</legend>
           <div class="chips">${L.SHAPES.map((shape) =>
             chip({ action: 'live-toggle-shape', value: shape.key, label: shape.label, selected: s.shapes.includes(shape.key) }),
           ).join('')}</div>
         </fieldset>
         <fieldset>
-          <legend>How many of each (from next trial)</legend>
+          <legend>Count each</legend>
           <select data-input="count" data-focus-id="input:count">${countOptions(s.count)}</select>
         </fieldset>
         <fieldset>
-          <legend>Motion (from next trial)</legend>
+          <legend>Motion</legend>
           <div class="chips">${L.MOTION_PATTERNS.map((pattern) =>
             chip({ action: 'live-set', key: 'pattern', value: pattern, label: MOTION_LABELS[pattern], selected: s.pattern === pattern }),
           ).join('')}</div>
         </fieldset>
         <fieldset>
-          <legend>Fill (now)</legend>
+          <legend>Fill</legend>
           <div class="chips">${L.FILL_MODES.map((fill) =>
             chip({ action: 'live-set', key: 'fill', value: fill, label: FILL_LABELS[fill], selected: s.fill === fill }),
           ).join('')}</div>
         </fieldset>
         <fieldset>
-          <legend>Colour (now)</legend>
-          <div class="chips">${L.COLORS.map((color) =>
-            chip({ action: 'live-set', key: 'color', value: color.key, label: color.label, selected: s.color === color.key, swatch: color.hex }),
-          ).join('')}</div>
-        </fieldset>
-        <fieldset>
-          <legend>Background (now)</legend>
-          <div class="chips">${L.BACKGROUNDS.map((bg) =>
-            chip({ action: 'live-set', key: 'background', value: bg.key, label: bg.label, selected: s.background === bg.key, swatch: bg.hex }),
-          ).join('')}</div>
-        </fieldset>
-        <fieldset>
-          <legend>Speed (now)</legend>
+          <legend>Speed</legend>
           <label class="slider-label">
             <input type="range" min="0" max="${SPEED_MAX}" step="10" value="${s.speed}" data-input="speed" data-focus-id="input:speed">
             <output id="live-speed">${esc(speedLabelFor(s))}</output>
           </label>
         </fieldset>
+        <fieldset class="wide">
+          <legend>Colour</legend>
+          <div class="chips">${L.COLORS.map((color) =>
+            chip({ action: 'live-set', key: 'color', value: color.key, label: color.label, selected: s.color === color.key, swatch: color.hex }),
+          ).join('')}</div>
+        </fieldset>
         <fieldset>
-          <legend>Size (now)</legend>
+          <legend>Background</legend>
+          <div class="chips">${L.BACKGROUNDS.map((bg) =>
+            chip({ action: 'live-set', key: 'background', value: bg.key, label: bg.label, selected: s.background === bg.key, swatch: bg.hex }),
+          ).join('')}</div>
+        </fieldset>
+        <fieldset>
+          <legend>Size</legend>
           <div class="chips">
             <button type="button" data-action="size-down" data-focus-id="size:down">Smaller (S)</button>
             <span id="live-size" class="live-value">${formatDeg(currentSizeDeg())}</span>
             <button type="button" data-action="size-up" data-focus-id="size:up">Bigger (B)</button>
           </div>
-          <p class="muted">${esc(sizeNote)}</p>
         </fieldset>
-        <fieldset>
-          <legend>Calibration (now)</legend>
-          <label>Viewing distance (cm)
-            <input type="number" min="${L.LIMITS.viewingDistanceCm.min}" max="${L.LIMITS.viewingDistanceCm.max}" value="${s.viewingDistanceCm}" data-input="viewingDistanceCm" data-focus-id="input:distance">
-          </label>
-          <label>Screen width (cm)
-            <input type="number" min="${L.LIMITS.screenWidthCm.min}" max="${L.LIMITS.screenWidthCm.max}" value="${s.screenWidthCm}" data-input="screenWidthCm" data-focus-id="input:width">
-          </label>
-          <p class="muted" id="live-px">${esc(pxPerCm ? `1° is ${L.degToPx(1, s.viewingDistanceCm, pxPerCm).toFixed(1)} px` : 'Enter valid values to calibrate.')}</p>
+        <fieldset class="wide">
+          <legend>Calibration</legend>
+          <div class="chips">
+            <label>Viewing distance (cm)
+              <input type="number" min="${L.LIMITS.viewingDistanceCm.min}" max="${L.LIMITS.viewingDistanceCm.max}" value="${s.viewingDistanceCm}" data-input="viewingDistanceCm" data-focus-id="input:distance">
+            </label>
+            <label>Screen width (cm)
+              <input type="number" min="${L.LIMITS.screenWidthCm.min}" max="${L.LIMITS.screenWidthCm.max}" value="${s.screenWidthCm}" data-input="screenWidthCm" data-focus-id="input:width">
+            </label>
+            <span class="muted" id="live-px">${esc(pxPerCm ? `1° is ${L.degToPx(1, s.viewingDistanceCm, pxPerCm).toFixed(1)} px` : 'Enter valid values to calibrate.')}</span>
+          </div>
         </fieldset>
+        <div class="wide row">
+          <button type="button" data-action="reset-settings" data-focus-id="adjust:reset">Reset settings to defaults</button>
+        </div>
       </div>`,
     );
   }
@@ -1107,9 +1126,8 @@
       trialView.update({ filled: t.current.filled });
     } else if (key === 'speed') {
       trialView.setSpeed(s.speed);
-    } else if (key === 'count' && t.blocked) {
-      // A lower count may make the blocked trial fit now.
-      nextTrial();
+    } else if (key === 'shapes' || key === 'count' || key === 'pattern') {
+      applyTrialShapesNow();
     } else if (key === 'viewingDistanceCm' || key === 'screenWidthCm') {
       if (calibrationValid(s)) {
         t.pxPerCm = pxPerCmFor(s);
@@ -1139,6 +1157,52 @@
     return L.layoutFit(count, width, height, px);
   }
 
+  // Every selected shape type is drawn `count` times. Returns the shapes to draw and the count the person must name for each.
+  function trialShapes(s) {
+    const shapes = s.shapes.map((key) => ({ key, count: s.count }));
+    const targets = Object.fromEntries(shapes.map(({ key, count }) => [key, count]));
+    return { shapes, targets };
+  }
+
+  // Applies a change to shapes, count or motion to the trial on screen straight away. The person's count is kept for
+  // shape types that are still shown; counts for shape types that were removed are dropped.
+  // If the new shapes do not fit, the trial is held until they do (or the size is made smaller).
+  function applyTrialShapesNow() {
+    const t = state.test;
+    if (!t) {
+      return;
+    }
+    if (!t.current) {
+      // A trial held back for lack of room may fit now.
+      if (t.blocked) {
+        nextTrial();
+      }
+      return;
+    }
+    const s = state.settings;
+    const { shapes, targets } = trialShapes(s);
+    const count = shapesPerTrial(s);
+    const px = L.degToPx(t.current.sizeDeg, s.viewingDistanceCm, t.pxPerCm);
+    const fit = stageFit(px, count);
+    if (!fit.fits) {
+      holdTrial(t, fitMessage(t.current.sizeDeg, px, count, fit));
+      updateHud();
+      return;
+    }
+    const shapesChanged = JSON.stringify(t.current.targets) !== JSON.stringify(targets);
+    t.current.targets = targets;
+    t.current.counts = Object.fromEntries(Object.entries(t.current.counts).filter(([key]) => key in targets));
+    if (shapesChanged) {
+      trialView.update({ shapes });
+    }
+    if (t.current.pattern !== s.pattern) {
+      t.current.pattern = s.pattern;
+      trialView.update({ pattern: s.pattern });
+    }
+    renderResponses();
+    updateHud();
+  }
+
   function nextTrial() {
     const t = state.test;
     if (!t) {
@@ -1154,9 +1218,7 @@
     const px = L.degToPx(sizeDeg, s.viewingDistanceCm, t.pxPerCm);
     const count = shapesPerTrial(s);
     const filled = s.fill === 'mixed' ? L.secureRandom() < 0.5 : s.fill === 'filled';
-    // Every selected shape type is drawn `count` times. The count is read now, so changes made later apply from the next trial.
-    const shapes = s.shapes.map((key) => ({ key, count: s.count }));
-    const targets = Object.fromEntries(shapes.map(({ key, count }) => [key, count]));
+    const { shapes, targets } = trialShapes(s);
     t.current = {
       targets,
       counts: {},
@@ -1497,7 +1559,7 @@
     },
     'live-toggle-shape': (el) => {
       toggleShape(el.dataset.value);
-      saveSettings();
+      applyLive('shapes');
       renderAdjust();
     },
   };
