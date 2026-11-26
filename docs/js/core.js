@@ -231,44 +231,39 @@
 
   // ---------- layout ----------
 
-  // The grid with the largest smallest gap between neighbours. Needs count > 1 and a stage at least `size` in each direction.
-  function bestGrid(count, width, height, size) {
-    const spanX = width - size;
-    const spanY = height - size;
+  // The grid whose cells are the largest. The stage is split into equal cells, one per row and column, so the space
+  // is shared out evenly. Cells are as square as they can be, so the gap across and the gap down match as closely as possible.
+  // `spacing` is the smaller of the two gaps between neighbours (cell centres), or Infinity when there is only one shape.
+  function bestGrid(count, width, height) {
     let best = null;
     for (let rows = 1; rows <= count; rows += 1) {
       const cols = Math.ceil(count / rows);
-      const gapX = cols > 1 ? spanX / (cols - 1) : Infinity;
-      const gapY = rows > 1 ? spanY / (rows - 1) : Infinity;
-      const spacing = Math.min(gapX, gapY);
+      const cellWidth = width / cols;
+      const cellHeight = height / rows;
+      const spacing = Math.min(cols > 1 ? cellWidth : Infinity, rows > 1 ? cellHeight : Infinity);
       if (!best || spacing > best.spacing) {
-        best = { rows, cols, gapX, gapY, spacing };
+        best = { rows, cols, cellWidth, cellHeight, spacing };
       }
     }
     return best;
   }
 
-  // Centres for `count` shapes of `size` on a width x height stage. Tries every row count and keeps the grid
-  // whose smallest gap between neighbours is largest. Centres stay `size / 2` from each edge, so nothing is cropped.
-  // If the shape cannot fit, every centre falls at the middle, as the single-shape test always did.
+  // Centres for `count` shapes of `size` on a width x height stage. Each shape sits in the middle of its cell, so the
+  // margin at every edge is the same and the rows and columns are evenly spaced. A row with fewer shapes is centred.
+  // If the shape is wider or taller than the stage, every centre falls at the middle, as the single-shape test always did.
   function gridPositions(count, width, height, size) {
-    const half = size / 2;
-    const spanX = width - size;
-    const spanY = height - size;
-    const centre = { x: width / 2, y: height / 2 };
-    if (count === 1 || spanX < 0 || spanY < 0) {
-      return Array.from({ length: count }, () => ({ ...centre }));
+    if (size > width || size > height) {
+      return Array.from({ length: count }, () => ({ x: width / 2, y: height / 2 }));
     }
-    const best = bestGrid(count, width, height, size);
+    const { cols, cellWidth, cellHeight } = bestGrid(count, width, height);
     const positions = [];
     for (let row = 0; positions.length < count; row += 1) {
-      const inRow = Math.min(best.cols, count - positions.length);
-      // Rows with fewer shapes are centred. Centring on half a gap keeps the smallest spacing unchanged.
-      const offset = (best.cols - inRow) / 2;
+      const inRow = Math.min(cols, count - positions.length);
+      const offset = (cols - inRow) / 2;
       for (let col = 0; col < inRow; col += 1) {
         positions.push({
-          x: best.cols > 1 ? half + (offset + col) * best.gapX : centre.x,
-          y: best.rows > 1 ? half + row * best.gapY : centre.y,
+          x: (offset + col + 0.5) * cellWidth,
+          y: (row + 0.5) * cellHeight,
         });
       }
     }
@@ -287,7 +282,7 @@
     if (count === 1) {
       return { fits: true, reason: null };
     }
-    return bestGrid(count, width, height, size).spacing >= size * (1 + SHAPE_GAP)
+    return bestGrid(count, width, height).spacing >= size * (1 + SHAPE_GAP)
       ? { fits: true, reason: null }
       : { fits: false, reason: 'overlap' };
   }

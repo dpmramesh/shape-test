@@ -250,8 +250,23 @@ describe('multiple shapes per trial', () => {
   });
 
   test('the grid spreads shapes as far apart as it can', () => {
-    // Four shapes on a 1000 x 1000 stage: a 2 x 2 grid with a gap of 900 beats a 1 x 4 row (gap 300).
-    assert.equal(Math.round(minGap(L.gridPositions(4, 1000, 1000, 100))), 900);
+    // Four shapes on a 1000 x 1000 stage: a 2 x 2 grid of 500 x 500 cells beats a 1 x 4 row (cells of 250).
+    assert.equal(Math.round(minGap(L.gridPositions(4, 1000, 1000, 100))), 500);
+  });
+
+  test('shapes are spread evenly: the same margin at each edge and the same space between rows', () => {
+    // Six shapes on a wide stage: three in each row, each in the middle of its cell.
+    const placed = L.gridPositions(6, 1800, 800, 60);
+    const xs = [...new Set(placed.map((p) => Math.round(p.x)))];
+    const ys = [...new Set(placed.map((p) => Math.round(p.y)))];
+    assert.deepEqual(xs, [300, 900, 1500]);
+    assert.deepEqual(ys, [200, 600]);
+  });
+
+  test('a short last row is centred, so the layout stays symmetric', () => {
+    const placed = L.gridPositions(5, 1000, 600, 40);
+    const xs = placed.map((p) => p.x);
+    assert.ok(Math.abs(Math.min(...xs) + Math.max(...xs) - 1000) < 1e-9);
   });
 
   test('no two shapes overlap when there is room for them', () => {

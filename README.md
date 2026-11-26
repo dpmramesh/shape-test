@@ -35,13 +35,12 @@ GitHub Pages serves over HTTPS, which the browser needs for some features. Nothi
 
 ### During the test
 
-- **Layout and motion:** shapes are spaced as far apart as the stage allows, with a gap of a quarter of a shape's size between neighbours, and none is cut off at the edges. Each shape moves on its own with the chosen motion. Shapes may pass over each other while moving. In orbit mode, a shape placed near an edge jumps onto the largest orbit that stays on screen on its first frame.
-- **Overlap check:** before anything is drawn, the app checks that the shapes fit. Setup shows a warning and will not start a test if the starting size does not fit. During the test, a trial that would not fit is held back, and the message says what to change: press `S` for a smaller size, or lower the count. A size change that would make shapes on screen overlap is refused. If the Adjust panel or a window resize shrinks the stage so the shapes on screen would overlap, that trial is held back the same way.
+- **Layout and motion:** the stage is split into equal cells, one per shape, and each shape sits in the middle of its cell. The space is shared out evenly: the same margin at every edge, and the same gap across and down. Shapes keep a gap of a quarter of their size between neighbours, and none is cut off at the edges. Each shape moves on its own with the chosen motion. Shapes may pass over each other while moving. In orbit mode, a shape placed near an edge jumps onto the largest orbit that stays on screen on its first frame.
+- **Overlap check:** before anything is drawn, the app checks that the shapes fit. Setup shows a warning and will not start a test if the starting size does not fit. During the test, a trial that would not fit is held back, and the message says what to change: press `S` for a smaller size, or lower the count. A size change that would make shapes on screen overlap is refused. If the settings panel or a window resize shrinks the stage so the shapes on screen would overlap, that trial is held back the same way.
 - **Responses:** the person names each shape type they see and says how many of it there are. Tap a shape type (or press its number) once for each one counted, then tap **Record answer** (or press `R`). Only the shape types on the current trial are listed. Use **Clear count** (or `C`) to start the count again. `0` records nothing seen, and `U` records seen but not identified. Response time is recorded.
 - **Scoring:** a trial is correct only if every shape type shown has exactly the right count, and no other shape type is named. Accuracy by shape counts each shape type in a trial separately.
-- **Adjust panel (`A`):** change parameters while the test runs, so you can respond to what the person says:
-  - *Shapes*, *count* and *motion*: take effect from the next trial (so the person isn't asked about a shape that changed mid-answer).
-  - *Fill*, *colour*, *background*, *speed*, *size* and *calibration*: take effect on the shape on screen now.
+- **Settings (`A`, or the settings button on the right edge):** change parameters while the test runs, so you can respond to what the person says. The button stays on screen even when the controls are hidden. All options are in one view, so nothing needs scrolling on a TV.
+  - Every change applies to the trial on screen straight away: *shapes*, *count* and *motion* re-lay out the shapes, and *fill*, *colour*, *background*, *speed*, *size* and *calibration* change them in place. Counts already named for a shape type that is removed are dropped.
   - *Size* moves the staircase level in adaptive mode without counting as a reversal, so you can steer the test by hand.
 - **Pause (`P`)** and **hide controls (`H`)** for a cleaner view.
 - **End (`Esc`)** shows the results. Save the session to the person's record, or discard it.
@@ -69,10 +68,10 @@ Every trial stores the settings in effect when it was shown: shape, size, fill, 
 | `0` | Nothing seen |
 | `U` | Seen but not identified |
 | `P` | Pause or resume |
-| `A` | Show or hide the Adjust panel |
-| Fire TV Menu (`ContextMenu`) | Show or hide the Adjust panel |
+| `A` | Show or hide the settings panel |
+| Fire TV Menu (`ContextMenu`) | Show or hide the settings panel |
 | Fire TV Play/Pause (`MediaPlayPause`) | Pause or resume the test |
-| `Esc` or Fire TV Back | Close the Adjust panel if it is open, otherwise end the test |
+| `Esc` or Fire TV Back | Close the settings panel if it is open, otherwise end the test |
 
 To check which key names a remote sends, open **Check remote keys** on the home screen (`docs/keys.html`). Each press is listed with its `key` and `code`.
 | `B` / `S` | Bigger / smaller |
@@ -126,7 +125,7 @@ Browser check (needs Microsoft Edge or Google Chrome installed; skips otherwise)
 npm run e2e
 ```
 
-It opens `docs/index.html` straight from disk with no server, creates a person, runs a test, uses the Adjust controls, checks that opening Adjust on a drawn trial either keeps it drawn within the narrower stage or holds it, saves the session, starts a guest test, and checks that no JavaScript errors occurred.
+It opens `docs/index.html` straight from disk with no server, creates a person, runs a test, uses the settings controls, checks that changes reach the trial on screen straight away, checks that opening the settings panel on a drawn trial either keeps it drawn within the narrower stage or holds it, saves the session, starts a guest test, and checks that no JavaScript errors occurred.
 
 `npm` is optional for the app itself. It is only used to run the tests above, and the project has no dependencies to install.
 
@@ -144,6 +143,6 @@ It opens `docs/index.html` straight from disk with no server, creates a person, 
 
 - Tested in headless Microsoft Edge on Windows. Not yet run on a physical Fire TV or Google TV. Check the Silk and Google TV browsers before a clinical session.
 - Sizes are only as accurate as the calibration values entered.
-- Shapes are placed on a grid to keep the gaps as large as possible. When there is no room for the gap, the test will not start, or the trial is held back (see Overlap check above). The overlap check uses the full window at setup. The test itself checks the smaller stage, so a size that passes setup can still be held back during the test.
+- Shapes are placed in equal cells, so the spacing is even but tighter than before on wide screens: a grid of equal cells gives shapes less space between them than spreading them to the edges did, so the largest size that fits can be somewhat smaller. When there is no room for the gap, the test will not start, or the trial is held back (see Overlap check above). The overlap check uses the full window at setup. The test itself checks the smaller stage, so a size that passes setup can still be held back during the test.
 - The threshold needs enough reversals. An adaptive session with too few shows "not enough reversals".
 - Downloads depend on the browser. On some TV browsers the file may not save. If so, use the report on a laptop, or record results on paper and enter them later.
